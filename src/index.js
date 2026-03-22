@@ -22,20 +22,79 @@ const app = express();
 const primaryPort = Number(process.env.PORT || 5000);
 const fallbackPort = 5050;
 
-/** Comma-separated origins for browser clients (e.g. https://your-app.vercel.app). Empty = allow all (fine for many APIs). */
+const DEFAULT_CORS_ORIGINS = [
+  "https://virnova-frontend.vercel.app",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173"
+];
+
+function logProductionEnvHints() {
+  if (!process.env.WAVESPEED_API_KEY) {
+    // eslint-disable-next-line no-console
+    console.error("[env] Missing WAVESPEED_API_KEY — AI generation will fail.");
+  }
+  const mongo = (process.env.MONGODB_URI || process.env.MONGO_URI || "").trim();
+  if (!mongo) {
+    // eslint-disable-next-line no-console
+    console.error("[env] Missing MONGODB_URI / MONGO_URI — auth and saved content will not work.");
+  }
+  if (process.env.OPENAI_API_KEY && !process.env.WAVESPEED_API_KEY) {
+    // eslint-disable-next-line no-console
+    console.warn("[env] OPENAI_API_KEY is set but this app uses WAVESPEED_API_KEY for LLM calls.");
+  }
+  const secret = process.env.JWT_SECRET || "";
+  if (!secret || secret === "virnova-dev-secret") {
+    // eslint-disable-next-line no-console
+    console.warn("[env] JWT_SECRET is missing or using dev default — rotate for production.");
+  }
+}
+
+/**
+ * CORS for browser clients (Vercel + local dev). Set CORS_ORIGIN to add more origins (comma-separated).
+ * Set CORS_ALLOW_ALL=1 only for temporary debugging.
+ */
 function buildCorsOptions() {
-  const raw = process.env.CORS_ORIGIN || "";
-  const origins = raw
+  const extra = (process.env.CORS_ORIGIN || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  if (origins.length === 0) {
-    return {};
+  const allowList = [...new Set([...DEFAULT_CORS_ORIGINS, ...extra])];
+
+  if (process.env.CORS_ALLOW_ALL === "1" || process.env.CORS_ALLOW_ALL === "true") {
+    // eslint-disable-next-line no-console
+    console.warn("[cors] CORS_ALLOW_ALL is enabled — not recommended for production.");
+    return { origin: true, credentials: true };
   }
+
   return {
-    origin: origins
+    origin(origin, callback) {
+      if (!origin) {
+        return callback(null, true);
+      }
+      if (allowList.includes(origin)) {
+        return callback(null, true);
+      }
+      try {
+        const { hostname } = new URL(origin);
+        if (hostname.endsWith(".vercel.app")) {
+          return callback(null, true);
+        }
+      } catch {
+        return callback(null, false);
+      }
+      // eslint-disable-next-line no-console
+      console.warn("[cors] Blocked origin:", origin);
+      return callback(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
   };
 }
+
+logProductionEnvHints();
 
 app.use(cors(buildCorsOptions()));
 app.use(express.json({ limit: "1mb" }));
@@ -59,6 +118,7 @@ app.use("/api/viral-content", viralContentRoutes);
 app.use("/api", viralGeneratorRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/", generateRoute);
+app.use("/api/ai", generateRoute);
 
 async function start() {
   const mongoOptional =

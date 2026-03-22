@@ -1,4 +1,8 @@
-const WAVESPEED_URL = "https://api.wavespeed.ai/api/v3/google/nano-banana-pro";
+import {
+  getWavespeedApiKey,
+  WAVESPEED_BASE_URL,
+  WAVESPEED_MODEL
+} from "../config/wavespeed.js";
 
 class WavespeedHttpError extends Error {
   constructor(message, statusCode, payload) {
@@ -54,18 +58,24 @@ function tryParseJsonFromText(text) {
 }
 
 async function callWavespeed(prompt) {
-  const apiKey = process.env.WAVESPEED_API_KEY;
+  const apiKey = getWavespeedApiKey();
   if (!apiKey) {
     throw new Error("WAVESPEED_API_KEY is missing in .env");
   }
 
-  const response = await fetch(WAVESPEED_URL, {
+  const response = await fetch(`${WAVESPEED_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ prompt })
+    body: JSON.stringify({
+      model: WAVESPEED_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 2048,
+      temperature: 0.7,
+      top_p: 1
+    })
   });
 
   let data = null;
@@ -76,15 +86,19 @@ async function callWavespeed(prompt) {
   }
 
   if (!response.ok) {
+    const msgFromApi =
+      data?.error?.message ||
+      (typeof data?.error === "string" ? data.error : null) ||
+      data?.message;
     const fallbackMessage =
       response.status === 401
         ? "Unauthorized: invalid Wavespeed API key."
         : response.status === 429
         ? "Rate limit exceeded by Wavespeed. Please retry shortly."
-        : "Wavespeed request failed";
+        : "Wavespeed LLM request failed";
 
     throw new WavespeedHttpError(
-      data?.error || data?.message || fallbackMessage,
+      msgFromApi || fallbackMessage,
       response.status,
       data
     );
