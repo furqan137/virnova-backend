@@ -38,9 +38,9 @@ function toObjectFromRaw(raw) {
 
 export const generateViral = async (req, res) => {
   try {
-    const { niche, topic, audience, links } = req.body || {};
-    if (!niche || !topic || !audience) {
-      return res.status(400).json({ error: "niche, topic, and audience are required" });
+    const { niche, topic, audience, links, reference_viral_content, platform } = req.body || {};
+    if (!niche || !topic) {
+      return res.status(400).json({ error: "niche and topic are required" });
     }
 
     const apiKey = getWavespeedApiKey();
@@ -48,6 +48,10 @@ export const generateViral = async (req, res) => {
       return res.status(500).json({ error: "WAVESPEED_API_KEY is missing in backend .env" });
     }
 
+    const normalizedReference = String(reference_viral_content || "").trim();
+    const normalizedPlatform = String(platform || "tiktok").toLowerCase();
+    const isInstagram = normalizedPlatform === "instagram_reels" || normalizedPlatform === "instagram";
+    const platformLabel = isInstagram ? "Instagram Reels" : "TikTok";
     const normalizedLinks = Array.isArray(links)
       ? links.filter(Boolean).join(", ")
       : String(links || "N/A");
@@ -57,8 +61,19 @@ Create a viral content package.
 
 Niche: ${niche}
 Topic: ${topic}
-Audience: ${audience}
-Links: ${normalizedLinks}
+Audience: ${String(audience || "General audience")}
+Platform: ${platformLabel}
+Reference viral content: ${normalizedReference || normalizedLinks || "N/A"}
+
+Instructions:
+- If reference viral content is provided, analyze its structure and mimic its style, pacing, and tone.
+- If reference viral content is not provided, use general viral patterns.
+- Write cinematic, highly descriptive visual language for AI video tools like Kling.
+- Include explicit lighting, camera angle, motion, and emotion cues.
+- Avoid generic prompts like "a man walking"; prefer specific scene detail.
+- Platform tuning:
+  - TikTok: more aggressive hooks and faster pacing.
+  - Instagram Reels: cleaner style and more aesthetic visuals.
 
 Return JSON:
 {

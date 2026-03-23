@@ -72,6 +72,8 @@ Return EXACTLY in JSON format:
 Rules:
 - Generate 6 ideas
 - Focus on viral, engaging, emotional triggers
+- When describing visuals, use cinematic and highly descriptive prompts for AI video tools like Kling.
+- Include concrete lighting, camera angle, motion, and emotion cues (avoid generic wording).
 - No markdown
 - No explanation text
 - Only JSON`;

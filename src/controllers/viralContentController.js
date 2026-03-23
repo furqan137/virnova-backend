@@ -54,11 +54,13 @@ async function askWavespeed(prompt) {
 }
 
 function parseInput(req) {
-  const { niche, topic, links, audience } = req.body || {};
+  const { niche, topic, links, audience, reference_viral_content, platform } = req.body || {};
   return {
     niche: String(niche || "").trim(),
     topic: String(topic || "").trim(),
     audience: String(audience || "").trim(),
+    reference_viral_content: String(reference_viral_content || "").trim(),
+    platform: String(platform || "tiktok").trim().toLowerCase(),
     links: Array.isArray(links)
       ? links.map((item) => String(item || "").trim()).filter(Boolean)
       : String(links || "")
@@ -70,12 +72,15 @@ function parseInput(req) {
 
 export async function analyzeViralContent(req, res) {
   const input = parseInput(req);
-  if (!input.niche || !input.topic || !input.audience) {
+  if (!input.niche || !input.topic) {
     return res.status(400).json({
       success: false,
-      error: "niche, topic, and audience are required"
+      error: "niche and topic are required"
     });
   }
+
+  const isInstagram = input.platform === "instagram_reels" || input.platform === "instagram";
+  const platformLabel = isInstagram ? "Instagram Reels" : "TikTok";
 
   const prompt = `You are a viral strategist.
 
@@ -88,8 +93,19 @@ Analyze creator input and return ONLY valid JSON:
 
 Niche: ${input.niche}
 Topic: ${input.topic}
-Target audience: ${input.audience}
-Viral links: ${input.links.length ? input.links.join(", ") : "N/A"}
+Target audience: ${input.audience || "General audience"}
+Platform: ${platformLabel}
+Reference viral content: ${input.reference_viral_content || (input.links.length ? input.links.join(", ") : "N/A")}
+
+Reference guidance:
+- If reference viral content is provided, analyze structure and mimic style, pacing, and tone.
+- If no reference is provided, use general viral patterns.
+- Use cinematic, highly descriptive short-form framing suitable for AI video tools like Kling.
+- Include explicit lighting, camera angle, motion, and emotion cues in style guidance.
+- Avoid generic visuals and prefer vivid, specific scene language.
+- Platform tuning:
+  - TikTok: aggressive hooks, faster pacing.
+  - Instagram Reels: cleaner style, more aesthetic visuals.
 
 Rules:
 - Keep items concise and actionable
@@ -131,12 +147,15 @@ Rules:
 
 export async function generateViralContent(req, res) {
   const input = parseInput(req);
-  if (!input.niche || !input.topic || !input.audience) {
+  if (!input.niche || !input.topic) {
     return res.status(400).json({
       success: false,
-      error: "niche, topic, and audience are required"
+      error: "niche and topic are required"
     });
   }
+
+  const isInstagram = input.platform === "instagram_reels" || input.platform === "instagram";
+  const platformLabel = isInstagram ? "Instagram Reels" : "TikTok";
 
   const prompt = `You are an elite short-form viral content creator.
 
@@ -155,8 +174,19 @@ Generate a full viral package and return ONLY valid JSON:
 
 Niche: ${input.niche}
 Topic: ${input.topic}
-Target audience: ${input.audience}
-Viral links: ${input.links.length ? input.links.join(", ") : "N/A"}
+Target audience: ${input.audience || "General audience"}
+Platform: ${platformLabel}
+Reference viral content: ${input.reference_viral_content || (input.links.length ? input.links.join(", ") : "N/A")}
+
+Reference guidance:
+- If reference viral content is provided, analyze structure and mimic style, pacing, and tone.
+- If no reference is provided, use general viral patterns.
+- Script direction should be cinematic and descriptive for AI video tools like Kling.
+- Include lighting, camera angle, motion, and emotional beats.
+- Avoid generic visual wording; use specific scenes and actions.
+- Platform tuning:
+  - TikTok: aggressive hooks, faster pacing.
+  - Instagram Reels: cleaner style, more aesthetic visuals.
 
 Rules:
 - Hook must be scroll-stopping

@@ -34,7 +34,51 @@ function normalizeHashtags(value) {
     .map((tag) => String(tag || "").trim())
     .filter(Boolean)
     .map((tag) => (tag.startsWith("#") ? tag.slice(1) : tag))
-    .slice(0, 12);
+    .slice(0, 6);
+}
+
+function slugTag(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .trim()
+    .replace(/\s+/g, "");
+}
+
+function buildHashtagSet(description, incoming = []) {
+  const words = String(description || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const top = words.slice(0, 2);
+  const nicheBase = slugTag(top[0] || "content");
+  const topicBase = slugTag(top[1] || "creator");
+
+  const fallback = [
+    `#${nicheBase}`,
+    `#${topicBase}`,
+    `#${nicheBase}tips`,
+    "#contentstrategy",
+    "#socialmediatips",
+    "#viral"
+  ];
+
+  const normalizedIncoming = normalizeHashtags(incoming)
+    .map((tag) => slugTag(tag))
+    .filter(Boolean)
+    .map((tag) => `#${tag}`);
+
+  return [...new Set([...normalizedIncoming, ...fallback])].slice(0, 6);
+}
+
+function normalizeCaptionText(value, description) {
+  const cleaned = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned) return cleaned.slice(0, 140);
+  const context = String(description || "this").split(/\s+/).slice(0, 4).join(" ");
+  return `This take on ${context} is wild. Agree or disagree?`;
 }
 
 function normalizeCaptionResult(parsed, rawText = "") {
@@ -77,10 +121,20 @@ Based on the following content description, generate:
 
 1. A powerful viral hook (1 line)
 2. A high-engagement caption (2-3 lines)
-3. 8-12 trending hashtags
+3. Exactly 6 hashtags as an array:
+   - 3 niche-specific
+   - 2 medium-competition
+   - 1 broad trending
 
 Description:
 ${description}
+
+If you include visual context in hook/caption wording, make it cinematic and specific for AI video tools like Kling:
+- mention lighting (cinematic, neon, natural)
+- mention camera angle (close-up, wide, drone)
+- mention motion (fast cuts, zoom, tracking shot)
+- mention emotion (excited, shocked, intense)
+- avoid generic visual phrasing.
 
 Return STRICT JSON:
 
@@ -156,15 +210,21 @@ Return STRICT JSON:
     }
 
     const normalized = normalizeCaptionResult(parsed, rawText);
+    const caption = normalizeCaptionText(normalized.caption, description);
+    const hashtags = buildHashtagSet(description, normalized.hashtags);
     console.log("[generate-caption] success", {
       hasHook: Boolean(normalized.hook),
-      hasCaption: Boolean(normalized.caption),
-      hashtagsCount: normalized.hashtags.length
+      hasCaption: Boolean(caption),
+      hashtagsCount: hashtags.length
     });
 
     return res.json({
       success: true,
-      data: normalized
+      data: {
+        ...normalized,
+        caption,
+        hashtags
+      }
     });
   } catch (error) {
     console.error("[generate-caption] error", error?.message || error);
