@@ -85,6 +85,29 @@ function scoreHook(hook) {
   return score;
 }
 
+function isStrongHook(hook) {
+  const text = normalizeHookText(hook);
+  const lowered = text.toLowerCase();
+  const words = wordCount(text);
+  if (!text || words < 6 || words > 12) return false;
+
+  const curiosityOrControversy =
+    /\b(nobody|wrong|secret|crazy|truth|exposed|stop|why|don't|doing this)\b/.test(lowered) ||
+    lowered.includes("nobody talks about this") ||
+    lowered.includes("you are doing this wrong") ||
+    lowered.includes("you’re doing this wrong");
+
+  const scrollStoppingPattern =
+    lowered.includes("this is why") ||
+    lowered.includes("nobody talks about this") ||
+    lowered.includes("you are doing this completely wrong") ||
+    lowered.includes("you’re doing this completely wrong") ||
+    lowered.includes("you are doing this wrong") ||
+    lowered.includes("you’re doing this wrong");
+
+  return curiosityOrControversy && scrollStoppingPattern;
+}
+
 function buildHookSet(inputHook, topic, niche, ragebaitMode = false) {
   const cleaned = normalizeHookText(inputHook);
   const safeTopic = String(topic || "this").trim();
@@ -96,19 +119,27 @@ function buildHookSet(inputHook, topic, niche, ragebaitMode = false) {
         `This will trigger you about ${safeNiche}`
       ]
     : [
-        `Nobody is talking about this ${safeTopic} trick`,
-        `This is actually crazy for ${safeNiche} creators`,
-        `You won't believe this ${safeTopic} result`
+        `This is why you're not growing in ${safeNiche} right now`,
+        `Nobody talks about this ${safeTopic} secret anymore`,
+        `You're doing this completely wrong in ${safeNiche} content`
       ];
 
   const hooks = [cleaned, ...baseHooks]
     .filter(Boolean)
     .map((hook) => normalizeHookText(hook))
-    .map((hook) => (wordCount(hook) > 10 ? hook.split(/\s+/).slice(0, 10).join(" ") : hook));
+    .map((hook) => {
+      const words = hook.split(/\s+/).filter(Boolean);
+      if (words.length > 12) return words.slice(0, 12).join(" ");
+      if (words.length < 6) return `${hook} right now`.trim();
+      return hook;
+    })
+    .filter((hook) => isStrongHook(hook));
 
   const uniqueHooks = [...new Set(hooks)].slice(0, 3);
   while (uniqueHooks.length < 3) {
-    uniqueHooks.push(baseHooks[uniqueHooks.length]);
+    const fallback = normalizeHookText(baseHooks[uniqueHooks.length] || `Nobody talks about this ${safeTopic} secret now`);
+    const words = fallback.split(/\s+/).filter(Boolean);
+    uniqueHooks.push(words.length > 12 ? words.slice(0, 12).join(" ") : words.length < 6 ? `${fallback} right now` : fallback);
   }
 
   const strongest = [...uniqueHooks].sort((a, b) => scoreHook(b) - scoreHook(a))[0] || "";
@@ -127,8 +158,11 @@ function normalizeCaption(caption, topic) {
   const cleaned = String(caption || "")
     .replace(/\s+/g, " ")
     .trim();
-  if (cleaned) return cleaned.slice(0, 140);
-  return `Hot take on ${topic}. Agree or disagree?`;
+  const withCta = cleaned || `Be honest... are you doing this with ${topic}?`;
+  if (/\b(save|comment|agree|disagree|watch|share)\b/i.test(withCta)) {
+    return withCta.slice(0, 140);
+  }
+  return `${withCta.slice(0, 110)} Comment yes or no.`.trim();
 }
 
 function buildHashtagSet(topic, niche, incoming = []) {
@@ -140,7 +174,9 @@ function buildHashtagSet(topic, niche, incoming = []) {
     `#${nicheTag}tips`,
     "#contentstrategy",
     "#socialmediatips",
-    "#viral"
+    "#viralreels",
+    "#trendingnow",
+    "#creatorlife"
   ];
 
   const normalizedIncoming = Array.isArray(incoming)
@@ -153,7 +189,7 @@ function buildHashtagSet(topic, niche, incoming = []) {
 
   const combined = [...normalizedIncoming, ...fallback];
   const unique = [...new Set(combined)];
-  return unique.slice(0, 6);
+  return unique.slice(0, 8);
 }
 
 function buildLoopEnding(inputEnding, hook, topic) {
@@ -168,11 +204,33 @@ function buildLoopEnding(inputEnding, hook, topic) {
   return `You missed it. Watch again from "${hookSnippet || topic}" and catch the clue.`;
 }
 
+function applyVoiceoverTone(voiceover, topic, ragebaitMode) {
+  const base = String(voiceover || "").trim() || `${topic} breakdown in 3 fast scenes.`;
+  if (ragebaitMode) {
+    if (/wrong|debate|controvers|hot take|nobody/i.test(base)) return base;
+    return `Hot take: most people are wrong about ${topic}. ${base}`;
+  }
+  return base;
+}
+
+function applyCaptionTone(caption, topic, ragebaitMode) {
+  const base = String(caption || "").trim() || `${topic} explained in 3 scenes. Rewatch for details.`;
+  if (ragebaitMode) {
+    if (/agree|disagree|wrong|debate|hot take/i.test(base)) return base;
+    return `Everyone is doing this wrong on ${topic}. Agree or disagree?`;
+  }
+  return base;
+}
+
 function cleanJsonText(text) {
   return String(text || "")
     .replace(/```json/gi, "")
     .replace(/```/g, "")
     .trim();
+}
+
+function isBlank(value) {
+  return value === null || value === undefined || String(value).trim() === "";
 }
 
 function normalizeScriptJsonShape(value, topic, niche, ragebaitMode) {
@@ -187,28 +245,109 @@ function normalizeScriptJsonShape(value, topic, niche, ragebaitMode) {
     .filter((scene) => scene && typeof scene === "object")
     .map((scene, index) => ({
       scene_number: Number(scene.scene_number) || index + 1,
-      visual_prompt: String(scene.visual_prompt || ""),
-      camera_style: String(scene.camera_style || scene.camera_movement || ""),
-      text_overlay: String(scene.text_overlay || "")
+      visual_prompt:
+        String(scene.visual_prompt || "").trim() ||
+        `Cinematic influencer shot for ${topic}, premium styling, dramatic framing, vivid color contrast.`,
+      camera_movement: String(scene.camera_movement || scene.camera_style || "").trim() || "Cinematic zoom-in with slight handheld motion",
+      lighting: String(scene.lighting || "").trim() || "Golden hour with dramatic edge lighting",
+      mood: String(scene.mood || "").trim() || "Confident and provocative",
+      subject_action: String(scene.subject_action || "").trim() || "Creator delivers a direct POV statement to camera",
+      text_overlay: String(scene.text_overlay || "").trim() || `Scene ${index + 1}`
     }));
 
-  while (scenes.length < 3) {
+  while (scenes.length < 2) {
     scenes.push({
       scene_number: scenes.length + 1,
       visual_prompt: `Scene ${scenes.length + 1} for ${topic}, cinematic lighting, dynamic motion, intense emotion.`,
-      camera_style: "Close-up with fast push-in",
+      camera_movement: "Close-up with fast push-in",
+      lighting: "Studio dramatic key light",
+      mood: "Energetic and intense",
+      subject_action: "Creator reacts and emphasizes key point with hand gestures",
       text_overlay: `Scene ${scenes.length + 1}`
     });
+  }
+
+  const hashtags = (Array.isArray(payload.hashtags) ? payload.hashtags : []).map((tag) => String(tag)).filter(Boolean);
+  while (hashtags.length < 5) {
+    hashtags.push(`#viral${hashtags.length + 1}`);
   }
 
   return {
     hook: hooks.strongest_hook,
     hook_variations: hookVariations,
-    voiceover: String(payload.voiceover || payload.script || ""),
-    scenes: scenes.slice(0, 5),
+    voiceover: applyVoiceoverTone(payload.voiceover || payload.script || "", topic, ragebaitMode),
+    scenes: scenes.slice(0, 4),
     loop_ending: buildLoopEnding(payload.loop_ending || payload.loopEnding, hooks.strongest_hook, topic),
-    caption: String(payload.caption || ""),
-    hashtags: (Array.isArray(payload.hashtags) ? payload.hashtags : []).map((tag) => String(tag)).filter(Boolean)
+    caption: applyCaptionTone(payload.caption || "", topic, ragebaitMode),
+    hashtags: hashtags.slice(0, 8)
+  };
+}
+
+function inferReferenceStyle(referenceText = "") {
+  const text = String(referenceText || "").toLowerCase();
+  if (!text.trim()) {
+    return {
+      tone: "confident",
+      pacing: "fast",
+      structure: "POV talking-head with quick pattern interrupt",
+      storytelling: "direct personal opinion with lifestyle context"
+    };
+  }
+
+  const tone = text.match(/\bluxury|premium|high-end|elegant\b/)
+    ? "luxury confident"
+    : text.match(/\bplayful|fun|chaotic|humor|lol\b/)
+    ? "playful confident"
+    : "bold confident";
+  const pacing = text.match(/\bfast|quick|rapid|snappy|cut\b/) ? "very fast" : "medium-fast";
+  const structure = text.match(/\bpov|talking|camera|confession\b/)
+    ? "POV talking-head with direct to-camera delivery"
+    : "POV lifestyle montage with voice-led commentary";
+  const storytelling = text.match(/\bstory|journey|before|after\b/)
+    ? "mini transformation story arc"
+    : "hot-take opener, bold middle claim, replay-trigger ending";
+  return { tone, pacing, structure, storytelling };
+}
+
+function validateStructuredPayload(value) {
+  if (!value || typeof value !== "object") return { valid: false, missing: ["root"] };
+  const missing = [];
+  if (isBlank(value.hook)) missing.push("hook");
+  if (isBlank(value.voiceover)) missing.push("voiceover");
+  if (isBlank(value.loop_ending)) missing.push("loop_ending");
+  if (isBlank(value.caption)) missing.push("caption");
+  if (!Array.isArray(value.hook_variations) || value.hook_variations.length < 3) missing.push("hook_variations(3)");
+  if (!Array.isArray(value.hashtags) || value.hashtags.length < 5 || value.hashtags.length > 8) missing.push("hashtags(5-8)");
+  if (!Array.isArray(value.scenes) || value.scenes.length < 2 || value.scenes.length > 4) {
+    missing.push("scenes(2-4)");
+  } else {
+    value.scenes.slice(0, 4).forEach((scene, index) => {
+      if (!scene || typeof scene !== "object") {
+        missing.push(`scenes[${index}]`);
+        return;
+      }
+      if (isBlank(scene.visual_prompt)) missing.push(`scenes[${index}].visual_prompt`);
+      if (isBlank(scene.camera_movement || scene.camera_style)) missing.push(`scenes[${index}].camera_movement`);
+      if (isBlank(scene.lighting)) missing.push(`scenes[${index}].lighting`);
+      if (isBlank(scene.mood)) missing.push(`scenes[${index}].mood`);
+      if (isBlank(scene.subject_action)) missing.push(`scenes[${index}].subject_action`);
+      if (isBlank(scene.text_overlay)) missing.push(`scenes[${index}].text_overlay`);
+    });
+  }
+  return { valid: missing.length === 0, missing };
+}
+
+function mergeScriptParts(base, patch) {
+  if (!patch || typeof patch !== "object") return base;
+  return {
+    ...base,
+    hook: !isBlank(patch.hook) ? patch.hook : base.hook,
+    hook_variations: Array.isArray(patch.hook_variations) && patch.hook_variations.length ? patch.hook_variations : base.hook_variations,
+    voiceover: !isBlank(patch.voiceover) ? patch.voiceover : base.voiceover,
+    scenes: Array.isArray(patch.scenes) && patch.scenes.length ? patch.scenes : base.scenes,
+    loop_ending: !isBlank(patch.loop_ending) ? patch.loop_ending : base.loop_ending,
+    caption: !isBlank(patch.caption) ? patch.caption : base.caption,
+    hashtags: Array.isArray(patch.hashtags) && patch.hashtags.length ? patch.hashtags : base.hashtags
   };
 }
 
@@ -310,6 +449,7 @@ export const generateScript = async (req, res) => {
   const { niche, topic, audience, ragebait_mode, reference_viral_content, platform } = req.body || {};
   const ragebaitMode = ragebait_mode === true || ragebait_mode === "true" || ragebait_mode === 1 || ragebait_mode === "1";
   const referenceViralContent = String(reference_viral_content || "").trim();
+  const styleProfile = inferReferenceStyle(referenceViralContent);
   const normalizedPlatform = String(platform || "tiktok").toLowerCase();
   const isInstagram = normalizedPlatform === "instagram_reels" || normalizedPlatform === "instagram";
   const platformLabel = isInstagram ? "Instagram Reels" : "TikTok";
@@ -325,17 +465,22 @@ Audience: ${String(audience || "General audience")}
 Ragebait mode: ${ragebaitMode ? "Enabled" : "Disabled"}
 Platform: ${platformLabel}
 Reference viral content: ${referenceViralContent || "N/A"}
+Reference style profile:
+- Tone: ${styleProfile.tone}
+- Pacing: ${styleProfile.pacing}
+- Structure: ${styleProfile.structure}
+- Storytelling: ${styleProfile.storytelling}
 
 Return structured scene-by-scene output for a high-retention short-form reel.
-Use 3 to 5 scenes total, optimized for a 6-12 second reel.
+Use 2 to 4 scenes total, optimized for a 6-10 second reel.
 Each scene must include:
 - scene_number
 - visual_prompt (cinematic Kling-style prompt ready for AI video tools)
-- action (what is happening)
-- emotion_or_reaction (visible feeling/reaction)
-- camera_movement (close-up, zoom, dolly, whip pan, etc.)
+- camera_style
+- lighting
+- mood
+- subject_action
 - text_overlay
-- duration_seconds (1-4)
 
 Also include:
 - hook
@@ -343,45 +488,116 @@ Also include:
 - voiceover
 - loop_ending
 - caption
-- hashtags (10)
+- hashtags (5 to 8)
 
 Hook mode rules:
-- If ragebait mode is enabled: generate controversial opinion-based hooks using debate, comparison, or cultural statement framing to spark comments and reactions.
-- If ragebait mode is disabled: use curiosity/shock pattern hooks like "Nobody is talking about this...", "This is actually crazy...", and "You won't believe this...".
+- If ragebait mode is enabled:
+  - Hook: controversial opinion-based hooks using debate/comparison framing.
+  - Voiceover: debate-style tone that triggers emotional reaction.
+  - Caption: emotional, provocative CTA that drives comments.
+- If ragebait mode is disabled:
+  - Hook: informative viral patterns.
+  - Voiceover: normal informative tone.
+  - Caption: normal informative tone.
 - Keep all hooks policy-safe and non-offensive (no hate, abuse, or targeted harassment).
 - "loop_ending" must connect back to the hook, create curiosity, and encourage rewatch.
 - Make the ending naturally loop into the beginning.
 - If reference viral content is provided, analyze it and mimic its structure, pacing, and tone.
+- If reference viral content is provided:
+  - copy storytelling style and creator personality cues
+  - use POV talking delivery
+  - keep lifestyle aesthetic framing
+  - avoid generic AI phrasing
 - If reference viral content is not provided, rely on general viral content patterns.
+- All content must remain strictly niche-specific and avoid generic filler.
 - Platform tuning:
   - TikTok: more aggressive hooks, faster pacing, stronger pattern interrupts.
   - Instagram Reels: cleaner style, slightly smoother pacing, more aesthetic visual composition.
+  - For Instagram Reels specifically, make content POV/opinion-led with authentic influencer delivery.
+- Instagram-style tone rules:
+  - Use confident, bold, slightly provocative influencer tone.
+  - Use Gen-Z phrasing with direct speaking and high engagement energy.
+  - Hooks should be emotional + controversial (policy-safe).
+  - Keep script structure optimized for 6-10 second short-form reels.
+  - Avoid generic content and make it feel like real influencer commentary.
 - All scene "visual_prompt" outputs must be cinematic and Kling-ready, explicitly including:
   - lighting style (cinematic, neon, natural, practical, etc.)
   - camera angle (close-up, wide, low-angle, overhead, drone, POV)
   - motion (fast cuts, zoom, tracking shot, dolly, whip pan, handheld)
   - visible emotion (excited, shocked, intense, curious, etc.)
 - Avoid generic prompts like "a man walking"; use specific, vivid scene descriptions.
+- Do NOT leave scenes empty. Each scene must include camera_style, lighting, mood, and subject_action.
 
 Make it fast-paced, highly engaging, and designed for looping retention.
 ${jsonInstruction(
-    '{"hook":"string","hook_variations":["string","string","string"],"voiceover":"string","scenes":[{"scene_number":1,"visual_prompt":"string","camera_style":"string","text_overlay":"string"}],"loop_ending":"string","caption":"string","hashtags":["#tag1","#tag2"]}'
+    '{"niche":"string","hook":"string","hook_variations":["string","string","string"],"voiceover":"string","scenes":[{"scene_number":1,"visual_prompt":"string","camera_style":"string","lighting":"string","mood":"string","text_overlay":"string"},{"scene_number":2,"visual_prompt":"string","camera_style":"string","lighting":"string","mood":"string","text_overlay":"string"}],"loop_ending":"string","caption":"string","hashtags":["#tag1","#tag2","#tag3","#tag4","#tag5"]}'
   )}`;
 
   try {
-    const { data, text } = await callWavespeed(prompt);
+    const { text } = await callWavespeed(prompt);
+    console.log("[generateScript] raw response:", text);
     let parsed = null;
     try {
       parsed = JSON.parse(cleanJsonText(text));
     } catch {
       parsed = tryParseJsonFromText(cleanJsonText(text));
     }
+    console.log("[generateScript] parsed json:", parsed);
+    let normalized = parsed ? normalizeScriptJsonShape(parsed, topic, niche, ragebaitMode) : null;
+    let validation = validateStructuredPayload(normalized);
+    console.log("[generateScript] missing fields:", validation?.missing || []);
 
-    if (parsed && typeof parsed === "object") {
-      return res.json(normalizeScriptJsonShape(parsed, topic, niche, ragebaitMode));
+    for (let attempt = 0; attempt < 2 && (!parsed || !validation.valid); attempt += 1) {
+      const retryPrompt = `${prompt}
+
+Your last response failed validation.
+Missing/invalid fields: ${(validation?.missing || ["invalid_json"]).join(", ")}.
+Regenerate and return ONLY pure JSON.`;
+      const retry = await callWavespeed(retryPrompt);
+      console.log(`[generateScript] retry ${attempt + 1} raw response:`, retry.text);
+      try {
+        parsed = JSON.parse(cleanJsonText(retry.text));
+      } catch {
+        parsed = tryParseJsonFromText(cleanJsonText(retry.text));
+      }
+      console.log(`[generateScript] retry ${attempt + 1} parsed json:`, parsed);
+      normalized = parsed ? normalizeScriptJsonShape(parsed, topic, niche, ragebaitMode) : null;
+      validation = validateStructuredPayload(normalized);
+      console.log(`[generateScript] retry ${attempt + 1} missing fields:`, validation?.missing || []);
     }
 
-    return res.status(502).json({ error: "AI did not return valid JSON", statusCode: 502 });
+    if (parsed && normalized && !validation.valid) {
+      const repairPrompt = `Regenerate ONLY missing parts for this JSON and return ONLY JSON with those fields:
+Missing: ${validation.missing.join(", ")}
+Current JSON:
+${JSON.stringify(normalized)}
+`;
+      const repair = await callWavespeed(repairPrompt);
+      console.log("[generateScript] repair raw response:", repair.text);
+      let repairParsed = null;
+      try {
+        repairParsed = JSON.parse(cleanJsonText(repair.text));
+      } catch {
+        repairParsed = tryParseJsonFromText(cleanJsonText(repair.text));
+      }
+      console.log("[generateScript] repair parsed json:", repairParsed);
+      if (repairParsed && typeof repairParsed === "object") {
+        normalized = normalizeScriptJsonShape(
+          mergeScriptParts(normalized, repairParsed),
+          topic,
+          niche,
+          ragebaitMode
+        );
+        validation = validateStructuredPayload(normalized);
+        console.log("[generateScript] post-repair missing fields:", validation?.missing || []);
+      }
+    }
+
+    if (!parsed || !validation.valid) {
+      return res.status(502).json({ error: "Invalid AI response", missing: validation?.missing || ["invalid_json"] });
+    }
+
+    return res.json(normalized);
   } catch (error) {
     if (isProductUnavailableError(error)) {
       return res.json(
@@ -398,19 +614,28 @@ ${jsonInstruction(
               {
                 scene_number: 1,
                 visual_prompt: `Close-up creator reveal in ${niche} studio, cinematic key light, quick zoom, shocked expression.`,
-                camera_style: "Close-up with quick push-in",
+                camera_movement: "Close-up with quick push-in",
+                lighting: "Dramatic studio key light with edge rim",
+                mood: "Confident and provocative",
+                subject_action: "Creator points at camera and challenges a common belief",
                 text_overlay: "You are missing this"
               },
               {
                 scene_number: 2,
                 visual_prompt: `Wide desk setup with neon practical lights, rapid tracking shot, intense focus on steps.`,
-                camera_style: "Wide tracking shot with fast cuts",
+                camera_movement: "Wide tracking shot with fast cuts",
+                lighting: "Neon practical lights with deep contrast",
+                mood: "High-energy and urgent",
+                subject_action: "Creator breaks down the unpopular opinion in one direct line",
                 text_overlay: "Do this now"
               },
               {
                 scene_number: 3,
                 visual_prompt: `Aesthetic payoff frame, warm lighting, smooth dolly, excited reaction for replay trigger.`,
-                camera_style: "Smooth dolly-in",
+                camera_movement: "Smooth dolly-in",
+                lighting: "Warm cinematic fill with soft highlights",
+                mood: "Bold and triumphant",
+                subject_action: "Creator smirks and drops a final provocative takeaway",
                 text_overlay: "Replay and catch step 1"
               }
             ],
@@ -491,17 +716,16 @@ Niche: ${niche}
 
 Provide:
 - Caption: short, engaging, TikTok/Instagram tone, with curiosity or a CTA
-- Hashtags as an array of exactly 6 tags:
-  - 3 niche-specific hashtags
-  - 2 medium-competition hashtags
-  - 1 broad trending hashtag
+- Hashtags as an array of 5 to 8 tags:
+  - Mix viral + niche
+  - Highly relevant to topic
 
 Hashtag rules:
 - Return only hashtag strings
 - Every hashtag must start with #
 - Keep tags relevant to topic and niche
 - If you reference visuals in the caption, use cinematic specifics instead of generic descriptions.
-${jsonInstruction('{"caption":"string","hashtags":["#tag1","#tag2","#tag3","#tag4","#tag5","#tag6"]}')}`;
+${jsonInstruction('{"caption":"string","hashtags":["#tag1","#tag2","#tag3","#tag4","#tag5"]}')}`;
 
   try {
     const { data, text } = await callWavespeed(prompt);

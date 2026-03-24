@@ -61,7 +61,9 @@ function buildHashtagSet(description, incoming = []) {
     `#${nicheBase}tips`,
     "#contentstrategy",
     "#socialmediatips",
-    "#viral"
+    "#viralreels",
+    "#trendingnow",
+    "#creatorlife"
   ];
 
   const normalizedIncoming = normalizeHashtags(incoming)
@@ -69,16 +71,19 @@ function buildHashtagSet(description, incoming = []) {
     .filter(Boolean)
     .map((tag) => `#${tag}`);
 
-  return [...new Set([...normalizedIncoming, ...fallback])].slice(0, 6);
+  return [...new Set([...normalizedIncoming, ...fallback])].slice(0, 8);
 }
 
 function normalizeCaptionText(value, description) {
   const cleaned = String(value || "")
     .replace(/\s+/g, " ")
     .trim();
-  if (cleaned) return cleaned.slice(0, 140);
   const context = String(description || "this").split(/\s+/).slice(0, 4).join(" ");
-  return `This take on ${context} is wild. Agree or disagree?`;
+  const withCta = cleaned || `Be honest... are you doing this ${context}?`;
+  if (/\b(save|comment|agree|disagree|watch|share)\b/i.test(withCta)) {
+    return withCta.slice(0, 140);
+  }
+  return `${withCta.slice(0, 110)} Comment below.`.trim();
 }
 
 function normalizeCaptionResult(parsed, rawText = "") {
@@ -121,10 +126,9 @@ Based on the following content description, generate:
 
 1. A powerful viral hook (1 line)
 2. A high-engagement caption (2-3 lines)
-3. Exactly 6 hashtags as an array:
-   - 3 niche-specific
-   - 2 medium-competition
-   - 1 broad trending
+3. 5 to 8 hashtags as an array:
+   - Mix of viral + niche hashtags
+   - All must be relevant to the topic
 
 Description:
 ${description}
