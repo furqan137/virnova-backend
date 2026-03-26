@@ -16,6 +16,7 @@ import viralContentRoutes from "./routes/viralContent.js";
 import viralGeneratorRoutes from "./routes/viralGenerator.js";
 import adminRoutes from "./routes/admin.js";
 import authRoutes from "./routes/auth.js";
+import trendScoutRoutes from "./routes/trendScout.js";
 import { connectDb } from "./db/connectDb.js";
 
 const app = express();
@@ -117,6 +118,7 @@ app.use("/api", contentIdeasRoutes);
 app.use("/api/viral-content", viralContentRoutes);
 app.use("/api", viralGeneratorRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/trend-scout", trendScoutRoutes);
 app.use("/", generateRoute);
 app.use("/api/ai", generateRoute);
 
