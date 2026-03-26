@@ -1,8 +1,45 @@
 import {
   getWavespeedApiKey,
-  WAVESPEED_BASE_URL,
   WAVESPEED_MODEL
 } from "../config/wavespeed.js";
+import { MASTER_SYSTEM_PROMPT, chatCompletion } from "../services/llmClient.js";
+
+const CREATOR_STYLE_PRESETS = {
+  none: {
+    label: "Default (Generic Viral)",
+    systemAddendum: ""
+  },
+  moroccan_lux_pov: {
+    label: "Luxury POV (Moroccan/Arab/Western)",
+    systemAddendum: `
+You are writing in the style of a SPECIFIC Instagram creator.
+
+Creator persona (non-negotiable):
+- POV (Point of View) storytelling
+- Bold, provocative hooks
+- Relationship dynamics (controversial, power dynamics, loyalty, money)
+- Luxury / lifestyle flex (money, attention, status)
+- Cultural identity tension (Moroccan / Arab / Western mix)
+- Soft dominance / teasing / control energy (feminine confidence)
+
+Hard bans:
+- No educational tone
+- No neutral advice
+- No generic self-help
+- No long paragraphs
+- No robotic disclaimers
+
+Voice & pacing rules:
+- Short sentences.
+- Conversational. Slight attitude/sass.
+- Feels real and postable. Not scripted.
+- Emotional trigger in first 1–2 seconds.
+
+POV overlay rule:
+- At least one hook variation MUST start with "POV:".
+`.trim()
+  }
+};
 
 function parseFirstJsonObject(text) {
   if (!text || typeof text !== "string") return null;
@@ -76,7 +113,7 @@ function validateStructuredPayload(value) {
   if (!value || typeof value !== "object") return { valid: false, missing: ["root"] };
   const missing = [];
   if (isBlank(value.hook)) missing.push("hook");
-  if (isBlank(value.voiceover)) missing.push("voiceover");
+  if (isBlank(value.voiceover) && isBlank(value.script)) missing.push("script_or_voiceover");
   if (isBlank(value.loop_ending)) missing.push("loop_ending");
   if (isBlank(value.caption)) missing.push("caption");
 
@@ -104,6 +141,37 @@ function validateStructuredPayload(value) {
   }
 
   return { valid: missing.length === 0, missing };
+}
+
+function matchesCreatorStylePreset(value, presetKey) {
+  if (!presetKey || presetKey === "none") return { ok: true, reasons: [] };
+  const reasons = [];
+  const hook = String(value?.hook || "").toLowerCase();
+  const variations = Array.isArray(value?.hook_variations) ? value.hook_variations.map((v) => String(v || "")) : [];
+  const voice = String(value?.script || value?.voiceover || "").toLowerCase();
+  const caption = String(value?.caption || "").toLowerCase();
+  const hashtags = Array.isArray(value?.hashtags) ? value.hashtags.map((t) => String(t || "").toLowerCase()) : [];
+
+  if (presetKey === "moroccan_lux_pov") {
+    const hasPov = variations.some((v) => v.trim().toLowerCase().startsWith("pov:")) || hook.trim().startsWith("pov:");
+    if (!hasPov) reasons.push('hook_variations must include a "POV:" line');
+
+    const themeSignals = /\b(50\/50|provider|pays|bills|expensive|princess|standards|high value|masculine|feminine|loyal|cheat|attention|status)\b/.test(
+      `${hook} ${voice} ${caption}`
+    );
+    if (!themeSignals) reasons.push("missing relationship/power/money/status tension");
+
+    const identitySignals = /\b(arab|moroccan|morocco|culture|western)\b/.test(`${hook} ${voice} ${caption}`);
+    if (!identitySignals) reasons.push("missing cultural identity tension signals");
+
+    const shortSentenceVibe = (value?.script || value?.voiceover || "").split(/\n+/).filter(Boolean).length >= 2;
+    if (!shortSentenceVibe) reasons.push("script should feel like short punchy lines (use line breaks)");
+
+    const hashtagSignals = hashtags.some((t) => t.includes("arabgirl") || t.includes("moroccan") || t.includes("arab"));
+    if (!hashtagSignals) reasons.push("hashtags should include identity tags (#arabgirl/#moroccan etc.)");
+  }
+
+  return { ok: reasons.length === 0, reasons };
 }
 
 function wordCount(text) {
@@ -270,6 +338,7 @@ function normalizeScriptResult(value, fallbackText = "", ragebaitMode = false, t
   return {
     hook: hooks.strongest_hook,
     hook_variations: hooks.hook_variations.slice(0, 3),
+    script: applyVoiceoverTone(baseValue.script || baseValue.voiceover || fallbackText || "", topic, ragebaitMode),
     voiceover: applyVoiceoverTone(baseValue.voiceover || baseValue.script || fallbackText || "", topic, ragebaitMode),
     scenes: normalizedScenes.slice(0, 4),
     loop_ending: buildLoopEnding(baseValue.loop_ending || baseValue.loopEnding, hooks.strongest_hook, topic),
@@ -293,10 +362,12 @@ function mergeScriptParts(base, patch) {
 }
 
 export async function generateScriptFromLlm(req, res) {
-  const { niche, topic, audience, tone, ragebait_mode, reference_viral_content, platform } = req.body || {};
+  const { niche, topic, audience, tone, ragebait_mode, reference_viral_content, platform, creator_style } = req.body || {};
   const ragebaitMode = ragebait_mode === true || ragebait_mode === "true" || ragebait_mode === 1 || ragebait_mode === "1";
   const referenceViralContent = String(reference_viral_content || "").trim();
   const styleProfile = inferReferenceStyle(referenceViralContent);
+  const creatorStyleKey = CREATOR_STYLE_PRESETS[String(creator_style || "").trim()] ? String(creator_style || "").trim() : "none";
+  const creatorPreset = CREATOR_STYLE_PRESETS[creatorStyleKey] || CREATOR_STYLE_PRESETS.none;
   const normalizedPlatform = String(platform || "tiktok").toLowerCase();
   const isInstagram = normalizedPlatform === "instagram_reels" || normalizedPlatform === "instagram";
   const platformLabel = isInstagram ? "Instagram Reels" : "TikTok";
@@ -326,6 +397,7 @@ Audience: ${audience || "General audience"}
 Tone: ${tone || "Engaging"}
 Ragebait mode: ${ragebaitMode ? "Enabled" : "Disabled"}
 Platform: ${platformLabel}
+Creator style preset: ${creatorPreset.label}
 Reference viral content: ${referenceViralContent || "N/A"}
 Reference style profile:
 - Tone: ${styleProfile.tone}
@@ -333,22 +405,22 @@ Reference style profile:
 - Structure: ${styleProfile.structure}
 - Storytelling: ${styleProfile.storytelling}
 
+CRITICAL creator style rules:
+${creatorPreset.systemAddendum || "- None"}
+
 Return STRICT JSON format:
 
 {
 "niche": "",
 "hook": "",
 "hook_variations": ["", "", ""],
-"voiceover": "",
+"script": "",
 "scenes": [
   {
-    "scene_number": 1,
+    "scene": 1,
     "visual_prompt": "",
-    "camera_style": "",
-    "lighting": "",
-    "mood": "",
-    "subject_action": "",
-    "text_overlay": ""
+    "camera": "",
+    "overlay_text": ""
   }
 ],
 "loop_ending": "",
@@ -357,21 +429,20 @@ Return STRICT JSON format:
 }
 
 Rules:
-- Create 2 to 4 scenes.
-- All content must align strictly to the selected niche.
+- Create 3 scenes.
+- All content must align strictly to the selected niche AND creator style.
 - Generate exactly 3 hook variations under "hook_variations".
-- Each hook must be 6 to 12 words.
-- Hooks must trigger curiosity, controversy, or shock.
+- Each hook must be 5 to 10 words.
+- Hooks must trigger ego/anger/curiosity in the first 1–2 seconds.
 - If ragebait mode is enabled:
   - Hook: controversial opinion/debate/comparison framing such as "X is better than Y", "People are wrong about this", or "This will trigger you...".
-  - Voiceover: debate-style, emotionally charged, provocative but policy-safe.
+  - Script: debate-style, emotionally charged, provocative but policy-safe.
   - Caption: emotional reaction bait with clear "agree/disagree" comment CTA.
 - If ragebait mode is disabled:
-  - Hook: informative viral pattern hooks.
-  - Voiceover: normal informative tone.
-  - Caption: normal educational/informative CTA tone.
+  - Hook: bold POV hooks (NOT educational).
+  - Script: confident POV talking-head tone (NOT educational).
+  - Caption: short, mysterious, sometimes sarcastic (NOT explanatory).
 - Keep hooks engaging, provocative, and policy-safe: no hate, abuse, or targeted harassment.
-- Choose the best-performing option and set it as both "strongest_hook" and "hook".
 - If reference viral content is provided, first analyze its structure and then mimic its style, pacing, and tone.
 - If reference viral content is provided:
   - mimic influencer storytelling style and personality
@@ -383,29 +454,19 @@ Rules:
   - TikTok: use more aggressive hooks and faster pacing with stronger pattern interrupts.
   - Instagram Reels: use cleaner style, smoother pacing, and more aesthetic visual framing.
   - For Instagram Reels specifically, make content POV/opinion-led with real influencer delivery.
-- Instagram-style voice rules:
+- Instagram-style creator rules:
   - Use confident, bold, slightly provocative influencer tone.
   - Keep language Gen-Z, direct speaking, and high-engagement.
   - Make hooks emotional + controversial while staying policy-safe.
   - Keep the whole reel in short-form 6-10 seconds total.
   - Avoid generic lines; make it feel like a real creator talking to camera.
-- Each scene should be fast-paced and designed for a total reel duration between 6 and 10 seconds.
-- Each "visual_prompt" must be a detailed Kling-style prompt for AI video generation.
-- Each scene must include REAL Kling-ready video prompt details and cannot be empty.
-- Make prompts cinematic and highly descriptive for AI video tools like Kling.
-- Every "visual_prompt" must explicitly include:
-  - Lighting (cinematic, neon, natural, golden hour, practical light, etc.)
-  - Camera angle (close-up, wide shot, overhead, drone, low angle, POV)
-  - Motion (fast cuts, zoom, tracking shot, dolly, whip pan, handheld movement)
-  - Emotion (excited, shocked, intense, curious, relieved, etc.)
-- Avoid generic wording like "a man walking".
-- Use specific visual language like: "Close-up of a street food vendor cooking, cinematic lighting, steam rising, fast cuts, vibrant colors".
-- "camera_style" should include camera movement direction (zoom, pan, handheld, tracking, etc.).
-- "lighting" should be explicit (golden hour, studio, dramatic, neon practicals, etc.).
-- "mood" should be explicit (confident, luxury, energetic, intense, etc.).
-- "subject_action" should describe exactly what the subject is doing on screen.
-- "text_overlay" should be short and punchy for on-screen captions.
-- "voiceover" must read naturally as one complete reel script.
+- Scenes MUST feel like real Instagram creator clips:
+  - Realistic environments: car, kitchen, mirror selfie, date setup, hotel lobby, elevator, café.
+  - Natural camera: front cam selfie, mirror selfie, casual vlog; slight handheld movement.
+  - Overlay text must look like IG text overlays (short, punchy, emotional).
+  - Each "visual_prompt" must be AI-video-tool ready but grounded in realistic creator filming.
+  - Each "visual_prompt" must explicitly include: environment + wardrobe + lighting + camera + motion + emotion.
+- Script must be short lines (use line breaks), POV, slightly toxic/teasing but policy-safe.
 - The final scene must naturally set up replay to improve looping retention.
 - "loop_ending" must connect back to the hook, create curiosity, and explicitly encourage rewatch.
 - Make the ending feel like it naturally loops into the beginning.
@@ -422,37 +483,20 @@ Rules:
       ragebaitMode
     });
 
-    const sendPrompt = async (messageContent) => {
-      const response = await fetch(`${WAVESPEED_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: WAVESPEED_MODEL || "bytedance-seed/seed-1.6-flash",
-          messages: [{ role: "user", content: messageContent }]
-        })
+    const sendPrompt = async (messageContent, opts = {}) => {
+      const completion = await chatCompletion({
+        model: opts.model || WAVESPEED_MODEL,
+        temperature: typeof opts.temperature === "number" ? opts.temperature : 0.7,
+        max_tokens: typeof opts.max_tokens === "number" ? opts.max_tokens : 2000,
+        messages: [
+          { role: "system", content: MASTER_SYSTEM_PROMPT },
+          { role: "user", content: String(messageContent || "") }
+        ]
       });
-      const responseText = await response.text();
-      let payload = null;
-      try {
-        payload = responseText ? JSON.parse(responseText) : null;
-      } catch {
-        payload = null;
-      }
-      if (!response.ok) {
-        throw new Error(
-          payload?.error?.message ||
-            payload?.error ||
-            payload?.message ||
-            `Wavespeed request failed with status ${response.status}`
-        );
-      }
-      return payload;
+      return completion;
     };
 
-    let payload = await sendPrompt(prompt);
+    let payload = await sendPrompt(prompt, { max_tokens: 2000, temperature: 0.7 });
     let resultText = payload?.choices?.[0]?.message?.content || "";
     console.log("[generate-script] raw response:", resultText);
     if (!resultText) {
@@ -466,21 +510,24 @@ Rules:
     console.log("[generate-script] parsed json:", parsed);
     let normalized = parsed ? normalizeScriptResult(parsed, resultText, ragebaitMode, topic, niche) : null;
     let validation = validateStructuredPayload(normalized);
+    let styleGate = matchesCreatorStylePreset(normalized, creatorStyleKey);
     console.log("[generate-script] missing fields:", validation?.missing || []);
 
-    for (let attempt = 0; attempt < 2 && (!parsed || !validation.valid); attempt += 1) {
+    for (let attempt = 0; attempt < 2 && (!parsed || !validation.valid || !styleGate.ok); attempt += 1) {
       const retryPrompt = `${prompt}
 
 Your last response failed validation.
 Missing/invalid fields: ${(validation?.missing || ["invalid_json"]).join(", ")}.
+Creator-style issues: ${(styleGate?.reasons || []).join(" | ") || "none"}.
 Regenerate and return ONLY pure JSON with complete fields.`;
-      payload = await sendPrompt(retryPrompt);
+      payload = await sendPrompt(retryPrompt, { max_tokens: 2000, temperature: 0.5 });
       resultText = payload?.choices?.[0]?.message?.content || "";
       console.log(`[generate-script] retry ${attempt + 1} raw response:`, resultText);
       parsed = parseStrictJson(resultText);
       console.log(`[generate-script] retry ${attempt + 1} parsed json:`, parsed);
       normalized = parsed ? normalizeScriptResult(parsed, resultText, ragebaitMode, topic, niche) : null;
       validation = validateStructuredPayload(normalized);
+      styleGate = matchesCreatorStylePreset(normalized, creatorStyleKey);
       console.log(`[generate-script] retry ${attempt + 1} missing fields:`, validation?.missing || []);
     }
 
@@ -490,7 +537,7 @@ Missing: ${validation.missing.join(", ")}
 Current JSON:
 ${JSON.stringify(normalized)}
 `;
-      const repairPayload = await sendPrompt(repairPrompt);
+      const repairPayload = await sendPrompt(repairPrompt, { max_tokens: 1200, temperature: 0.5 });
       const repairText = repairPayload?.choices?.[0]?.message?.content || "";
       console.log("[generate-script] repair raw response:", repairText);
       const repairParsed = parseStrictJson(repairText);
@@ -508,11 +555,12 @@ ${JSON.stringify(normalized)}
       }
     }
 
-    if (!parsed || !validation.valid) {
+    if (!parsed || !validation.valid || !styleGate.ok) {
       return res.status(502).json({
         success: false,
         error: "Invalid AI response",
-        missing: validation?.missing || ["invalid_json"]
+        missing: validation?.missing || ["invalid_json"],
+        style_issues: styleGate?.reasons || []
       });
     }
 

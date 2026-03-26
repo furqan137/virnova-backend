@@ -1,9 +1,9 @@
-import OpenAI from "openai";
 import {
   getWavespeedApiKey,
   WAVESPEED_BASE_URL,
   WAVESPEED_MODEL
 } from "../config/wavespeed.js";
+import { MASTER_SYSTEM_PROMPT, MissingApiKeyError as SharedMissingApiKeyError, chatCompletion } from "./llmClient.js";
 
 export class MissingApiKeyError extends Error {
   constructor() {
@@ -14,23 +14,18 @@ export class MissingApiKeyError extends Error {
 
 export async function requestTrendAnalysis({ prompt }) {
   const apiKey = getWavespeedApiKey();
-  if (!apiKey) throw new MissingApiKeyError();
-
-  const client = new OpenAI({
-    apiKey,
-    baseURL: WAVESPEED_BASE_URL
-  });
+  if (!apiKey) throw new (SharedMissingApiKeyError || MissingApiKeyError)();
 
   console.log("[wavespeed] sending request", { model: WAVESPEED_MODEL });
 
-  const completion = await client.chat.completions.create({
+  const completion = await chatCompletion({
     model: WAVESPEED_MODEL,
-    messages: [{ role: "user", content: prompt }],
-    max_tokens: 2048,
     temperature: 0.7,
-    top_p: 1,
-    presence_penalty: 0,
-    frequency_penalty: 0
+    max_tokens: 2000,
+    messages: [
+      { role: "system", content: MASTER_SYSTEM_PROMPT },
+      { role: "user", content: prompt }
+    ]
   });
 
   const content = completion?.choices?.[0]?.message?.content || "";

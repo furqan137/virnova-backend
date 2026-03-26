@@ -1,8 +1,8 @@
 import {
   getWavespeedApiKey,
-  WAVESPEED_BASE_URL,
   WAVESPEED_MODEL
 } from "../config/wavespeed.js";
+import { MASTER_SYSTEM_PROMPT, chatCompletion } from "../services/llmClient.js";
 
 class WavespeedHttpError extends Error {
   constructor(message, statusCode, payload) {
@@ -351,55 +351,36 @@ function mergeScriptParts(base, patch) {
   };
 }
 
-async function callWavespeed(prompt) {
+async function callWavespeed(prompt, options = {}) {
   const apiKey = getWavespeedApiKey();
   if (!apiKey) {
     throw new Error("WAVESPEED_API_KEY is missing in .env");
   }
 
-  const response = await fetch(`${WAVESPEED_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: WAVESPEED_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 2048,
-      temperature: 0.7,
-      top_p: 1
-    })
-  });
+  const {
+    temperature = 0.7,
+    max_tokens = 2000,
+    model = WAVESPEED_MODEL,
+    systemPrompt = MASTER_SYSTEM_PROMPT
+  } = options || {};
 
-  let data = null;
   try {
-    data = await response.json();
-  } catch {
-    data = null;
+    const completion = await chatCompletion({
+      model,
+      temperature,
+      max_tokens,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: String(prompt || "") }
+      ]
+    });
+    const text = completion?.choices?.[0]?.message?.content || "";
+    return { data: completion, text };
+  } catch (error) {
+    const status = Number(error?.status || error?.response?.status || 500);
+    const message = error?.message || "Wavespeed LLM request failed";
+    throw new WavespeedHttpError(message, status, null);
   }
-
-  if (!response.ok) {
-    const msgFromApi =
-      data?.error?.message ||
-      (typeof data?.error === "string" ? data.error : null) ||
-      data?.message;
-    const fallbackMessage =
-      response.status === 401
-        ? "Unauthorized: invalid Wavespeed API key."
-        : response.status === 429
-        ? "Rate limit exceeded by Wavespeed. Please retry shortly."
-        : "Wavespeed LLM request failed";
-
-    throw new WavespeedHttpError(
-      msgFromApi || fallbackMessage,
-      response.status,
-      data
-    );
-  }
-
-  const text = extractText(data);
-  return { data, text };
 }
 
 function jsonInstruction(schemaDescription) {
@@ -426,7 +407,7 @@ export const generateAI = async (req, res) => {
   }
 
   try {
-    const { data, text } = await callWavespeed(prompt);
+    const { data, text } = await callWavespeed(prompt, { max_tokens: 1200, temperature: 0.7 });
     const parsed = tryParseJsonFromText(text);
     return res.json({ text, parsed, raw: data });
   } catch (error) {
@@ -534,7 +515,7 @@ ${jsonInstruction(
   )}`;
 
   try {
-    const { text } = await callWavespeed(prompt);
+    const { text } = await callWavespeed(prompt, { max_tokens: 2000, temperature: 0.7 });
     console.log("[generateScript] raw response:", text);
     let parsed = null;
     try {
@@ -553,7 +534,7 @@ ${jsonInstruction(
 Your last response failed validation.
 Missing/invalid fields: ${(validation?.missing || ["invalid_json"]).join(", ")}.
 Regenerate and return ONLY pure JSON.`;
-      const retry = await callWavespeed(retryPrompt);
+      const retry = await callWavespeed(retryPrompt, { max_tokens: 2000, temperature: 0.5 });
       console.log(`[generateScript] retry ${attempt + 1} raw response:`, retry.text);
       try {
         parsed = JSON.parse(cleanJsonText(retry.text));
@@ -572,7 +553,7 @@ Missing: ${validation.missing.join(", ")}
 Current JSON:
 ${JSON.stringify(normalized)}
 `;
-      const repair = await callWavespeed(repairPrompt);
+      const repair = await callWavespeed(repairPrompt, { max_tokens: 1200, temperature: 0.5 });
       console.log("[generateScript] repair raw response:", repair.text);
       let repairParsed = null;
       try {
@@ -671,7 +652,7 @@ If an idea includes visual framing, use cinematic and highly descriptive short-f
 ${jsonInstruction('[{"title":"string","hook":"string","explanation":"string"}]')}`;
 
   try {
-    const { data, text } = await callWavespeed(prompt);
+    const { data, text } = await callWavespeed(prompt, { max_tokens: 900, temperature: 0.7 });
     const parsed = tryParseJsonFromText(text);
     if (Array.isArray(parsed)) return res.json({ ideas: parsed });
     if (Array.isArray(parsed?.ideas)) return res.json({ ideas: parsed.ideas });
@@ -728,7 +709,7 @@ Hashtag rules:
 ${jsonInstruction('{"caption":"string","hashtags":["#tag1","#tag2","#tag3","#tag4","#tag5"]}')}`;
 
   try {
-    const { data, text } = await callWavespeed(prompt);
+    const { data, text } = await callWavespeed(prompt, { max_tokens: 900, temperature: 0.7 });
     const parsed = tryParseJsonFromText(text);
     if (parsed && typeof parsed === "object") {
       return res.json({
@@ -770,7 +751,7 @@ ${jsonInstruction(
   )}`;
 
   try {
-    const { data, text } = await callWavespeed(prompt);
+    const { data, text } = await callWavespeed(prompt, { max_tokens: 700, temperature: 0.7 });
     const parsed = tryParseJsonFromText(text);
     if (parsed) return res.json(parsed);
     return res.json({ topHooks: [], keywords: [], contentStyle: "", emotionalTriggers: [], bestPostingTips: [], raw: data });
