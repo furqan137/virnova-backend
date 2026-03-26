@@ -17,6 +17,7 @@ import viralGeneratorRoutes from "./routes/viralGenerator.js";
 import adminRoutes from "./routes/admin.js";
 import authRoutes from "./routes/auth.js";
 import trendScoutRoutes from "./routes/trendScout.js";
+import diagnosticsRoutes from "./routes/diagnostics.js";
 import { connectDb } from "./db/connectDb.js";
 
 const app = express();
@@ -104,6 +105,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "virnova-backend" });
 });
 
+app.use("/api", diagnosticsRoutes);
 app.use("/api/content", contentRoutes);
 app.use("/api/trends", trendsRoutes);
 app.use("/api/ideas", ideasRoutes);
