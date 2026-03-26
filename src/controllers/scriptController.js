@@ -1,6 +1,7 @@
 import {
   getWavespeedApiKey,
-  WAVESPEED_MODEL
+  WAVESPEED_MODEL,
+  WAVESPEED_TREND_SCOUT_MODEL
 } from "../config/wavespeed.js";
 import { MASTER_SYSTEM_PROMPT, chatCompletion } from "../services/llmClient.js";
 
@@ -362,8 +363,19 @@ function mergeScriptParts(base, patch) {
 }
 
 export async function generateScriptFromLlm(req, res) {
-  const { niche, topic, audience, tone, ragebait_mode, reference_viral_content, platform, creator_style } = req.body || {};
+  const {
+    niche,
+    topic,
+    audience,
+    tone,
+    ragebait_mode,
+    reference_viral_content,
+    platform,
+    creator_style,
+    use_premium_model
+  } = req.body || {};
   const ragebaitMode = ragebait_mode === true || ragebait_mode === "true" || ragebait_mode === 1 || ragebait_mode === "1";
+  const usePremiumModel = use_premium_model === true || use_premium_model === "true" || use_premium_model === 1 || use_premium_model === "1";
   const referenceViralContent = String(reference_viral_content || "").trim();
   const styleProfile = inferReferenceStyle(referenceViralContent);
   const creatorStyleKey = CREATOR_STYLE_PRESETS[String(creator_style || "").trim()] ? String(creator_style || "").trim() : "none";
@@ -371,6 +383,7 @@ export async function generateScriptFromLlm(req, res) {
   const normalizedPlatform = String(platform || "tiktok").toLowerCase();
   const isInstagram = normalizedPlatform === "instagram_reels" || normalizedPlatform === "instagram";
   const platformLabel = isInstagram ? "Instagram Reels" : "TikTok";
+  const selectedModel = usePremiumModel ? WAVESPEED_TREND_SCOUT_MODEL : WAVESPEED_MODEL;
   if (!niche || !topic) {
     return res.status(400).json({
       success: false,
@@ -485,7 +498,7 @@ Rules:
 
     const sendPrompt = async (messageContent, opts = {}) => {
       const completion = await chatCompletion({
-        model: opts.model || WAVESPEED_MODEL,
+        model: opts.model || selectedModel,
         temperature: typeof opts.temperature === "number" ? opts.temperature : 0.7,
         max_tokens: typeof opts.max_tokens === "number" ? opts.max_tokens : 2000,
         messages: [
