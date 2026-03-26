@@ -4,6 +4,7 @@ import {
   WAVESPEED_BASE_URL,
   WAVESPEED_MODEL
 } from "../config/wavespeed.js";
+import { CLIENT_NICHE_HIDDEN_CONTEXT } from "../services/clientNiche.js";
 
 function parseJsonFromText(content) {
   if (!content || typeof content !== "string") return null;
@@ -84,6 +85,8 @@ export async function analyzeViralContent(req, res) {
 
   const prompt = `You are a viral strategist.
 
+${CLIENT_NICHE_HIDDEN_CONTEXT}
+
 Analyze creator input and return ONLY valid JSON:
 {
   "patterns": ["", "", ""],
@@ -108,6 +111,7 @@ Reference guidance:
   - Instagram Reels: cleaner style, more aesthetic visuals.
 
 Rules:
+- Keep everything niche-specific (culture/identity + controversial relationships).
 - Keep items concise and actionable
 - No markdown
 - No text outside JSON`;
@@ -158,6 +162,8 @@ export async function generateViralContent(req, res) {
   const platformLabel = isInstagram ? "Instagram Reels" : "TikTok";
 
   const prompt = `You are an elite short-form viral content creator.
+
+${CLIENT_NICHE_HIDDEN_CONTEXT}
 
 Generate a full viral package and return ONLY valid JSON:
 {

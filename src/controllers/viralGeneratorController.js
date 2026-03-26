@@ -4,6 +4,7 @@ import {
   WAVESPEED_BASE_URL,
   WAVESPEED_MODEL
 } from "../config/wavespeed.js";
+import { CLIENT_NICHE_HIDDEN_CONTEXT } from "../services/clientNiche.js";
 
 function asArray(value) {
   if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
@@ -58,6 +59,8 @@ export const generateViral = async (req, res) => {
 
     const prompt = `
 Create a viral content package.
+
+${CLIENT_NICHE_HIDDEN_CONTEXT}
 
 Niche: ${niche}
 Topic: ${topic}

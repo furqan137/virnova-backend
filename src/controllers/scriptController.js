@@ -4,6 +4,7 @@ import {
   WAVESPEED_TREND_SCOUT_MODEL
 } from "../config/wavespeed.js";
 import { MASTER_SYSTEM_PROMPT, chatCompletion } from "../services/llmClient.js";
+import { CLIENT_NICHE_HIDDEN_CONTEXT, hasClientNicheSignals } from "../services/clientNiche.js";
 
 const CREATOR_STYLE_PRESETS = {
   none: {
@@ -172,6 +173,25 @@ function matchesCreatorStylePreset(value, presetKey) {
     if (!hashtagSignals) reasons.push("hashtags should include identity tags (#arabgirl/#moroccan etc.)");
   }
 
+  return { ok: reasons.length === 0, reasons };
+}
+
+function matchesClientNiche(value) {
+  const reasons = [];
+  const combined = [
+    value?.hook,
+    ...(Array.isArray(value?.hook_variations) ? value.hook_variations : []),
+    value?.script,
+    value?.voiceover,
+    value?.caption,
+    ...(Array.isArray(value?.hashtags) ? value.hashtags : [])
+  ]
+    .map((v) => String(v || ""))
+    .join(" ");
+
+  if (!hasClientNicheSignals(combined)) {
+    reasons.push("missing required niche signals (culture/identity OR relationship conflict OR controversial POV)");
+  }
   return { ok: reasons.length === 0, reasons };
 }
 
@@ -421,6 +441,8 @@ Reference style profile:
 CRITICAL creator style rules:
 ${creatorPreset.systemAddendum || "- None"}
 
+${CLIENT_NICHE_HIDDEN_CONTEXT}
+
 Return STRICT JSON format:
 
 {
@@ -524,14 +546,16 @@ Rules:
     let normalized = parsed ? normalizeScriptResult(parsed, resultText, ragebaitMode, topic, niche) : null;
     let validation = validateStructuredPayload(normalized);
     let styleGate = matchesCreatorStylePreset(normalized, creatorStyleKey);
+    let nicheGate = matchesClientNiche(normalized);
     console.log("[generate-script] missing fields:", validation?.missing || []);
 
-    for (let attempt = 0; attempt < 2 && (!parsed || !validation.valid || !styleGate.ok); attempt += 1) {
+    for (let attempt = 0; attempt < 2 && (!parsed || !validation.valid || !styleGate.ok || !nicheGate.ok); attempt += 1) {
       const retryPrompt = `${prompt}
 
 Your last response failed validation.
 Missing/invalid fields: ${(validation?.missing || ["invalid_json"]).join(", ")}.
 Creator-style issues: ${(styleGate?.reasons || []).join(" | ") || "none"}.
+Client niche issues: ${(nicheGate?.reasons || []).join(" | ") || "none"}.
 Regenerate and return ONLY pure JSON with complete fields.`;
       payload = await sendPrompt(retryPrompt, { max_tokens: 2000, temperature: 0.5 });
       resultText = payload?.choices?.[0]?.message?.content || "";
@@ -541,6 +565,7 @@ Regenerate and return ONLY pure JSON with complete fields.`;
       normalized = parsed ? normalizeScriptResult(parsed, resultText, ragebaitMode, topic, niche) : null;
       validation = validateStructuredPayload(normalized);
       styleGate = matchesCreatorStylePreset(normalized, creatorStyleKey);
+      nicheGate = matchesClientNiche(normalized);
       console.log(`[generate-script] retry ${attempt + 1} missing fields:`, validation?.missing || []);
     }
 
@@ -568,12 +593,13 @@ ${JSON.stringify(normalized)}
       }
     }
 
-    if (!parsed || !validation.valid || !styleGate.ok) {
+    if (!parsed || !validation.valid || !styleGate.ok || !nicheGate.ok) {
       return res.status(502).json({
         success: false,
         error: "Invalid AI response",
         missing: validation?.missing || ["invalid_json"],
-        style_issues: styleGate?.reasons || []
+        style_issues: styleGate?.reasons || [],
+        niche_issues: nicheGate?.reasons || []
       });
     }
 

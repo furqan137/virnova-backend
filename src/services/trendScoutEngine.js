@@ -21,6 +21,14 @@ function buildFreshness(hours) {
   return "AGING";
 }
 
+function pickFrom(list, i) {
+  return list[i % list.length];
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
 export function buildTrendScoutPrompt({ niche, subNicheFilters = [], contentStyles = [], geography = "US", minItems = 10, maxItems = 20 }) {
   const filters = subNicheFilters.length ? subNicheFilters.join(", ") : "cultural duality, controversial opinions";
   const styles = contentStyles.length ? contentStyles.join(", ") : "POV, ragebait, text-overlay reels";
@@ -67,8 +75,9 @@ Output schema (no empty fields allowed):
 ]
 
 Rules:
-- Only return items with niche_relevance_score >= 7.
+- Only return items with niche_relevance_score >= 8.
 - Hooks must be scroll-stopping POV/opinion hooks (short, punchy).
+- Reject anything generic. Every item MUST include cultural tension OR relationship conflict OR controversial POV.
 - Simulate virality metrics realistically:
   - estimated_views: 50,000 to 3,000,000
   - hours_since_posted: 1 to 48
@@ -93,12 +102,37 @@ export function createTrendScoutFeed({
   const seed = hashSeed(`${niche}|${subNicheFilters.join(",")}|${contentStyles.join(",")}|${geography}`);
   const itemCount = Math.max(minItems, Math.min(maxItems, 10 + (seed % 11)));
 
-  const emotionalTriggers = ["anger", "curiosity", "identity", "ego", "belonging", "fear of missing out"];
+  const emotionalTriggers = ["anger", "ego", "identity", "jealousy", "curiosity"];
   const hookTypes = ["Contrarian POV", "Debate bait", "Identity callout", "Cultural friction", "Hot take"];
-  const tensionPoints = ["Expectation vs reality", "Tradition vs modernity", "Identity split", "Family pressure", "Social status"];
+  const tensionPoints = [
+    "Arab vs Western mindset",
+    "Money/provider vs 50/50",
+    "Religion vs modern dating",
+    "Family pressure vs personal freedom",
+    "Status/attention vs loyalty"
+  ];
   const formats = ["POV talking head", "Text-overlay rant reel", "Story confession", "Dark humor cut reel"];
   const styles = contentStyles.length ? contentStyles : ["POV", "ragebait", "text-overlay reels"];
   const filters = subNicheFilters.length ? subNicheFilters : ["controversial opinions", "cultural duality"];
+
+  const hookTemplates = [
+    "POV: he said 50/50, so I laughed",
+    "POV: he wants tradition, but lives modern",
+    "POV: you date outside your culture and regret it",
+    "POV: he loves your vibe until you set standards",
+    "POV: he wants feminine… until it costs money",
+    "POV: your family hates him, but you can’t leave",
+    "POV: he said “haram” but still texts at 2am"
+  ];
+
+  const titleTemplates = [
+    "Moroccan girl POV: standards vs 50/50",
+    "Arab vs Western dating expectations (POV)",
+    "Religion vs modern lifestyle tension (reel idea)",
+    "Interracial dating reality check (POV)",
+    "High value lifestyle perception (hot take)",
+    "Family pressure vs love (confession POV)"
+  ];
 
   const ideas = [];
   for (let i = 0; i < itemCount; i += 1) {
@@ -116,16 +150,16 @@ export function createTrendScoutFeed({
     const engagementVelocityScore =
       estimatedViews / hoursSincePosted + commentRate * 120000 + shareRate * 150000;
 
-    const nicheScoreRaw = 7 + ((seed + i * 23) % 4);
-    const nicheRelevanceScore = Math.max(7, Math.min(10, nicheScoreRaw));
+    const nicheScoreRaw = 8 + ((seed + i * 23) % 3);
+    const nicheRelevanceScore = clamp(nicheScoreRaw, 8, 10);
     const viralityStatus = buildViralityStatus(engagementVelocityScore);
     const freshness = buildFreshness(hoursSincePosted);
     const geoTag = geography === "Middle East" || geography === "Arab world" ? "diaspora" : "local";
 
-    const title = `${niche} ${filter} ${style} angle ${i + 1}`;
-    const hook = `POV: ${filter} is why ${niche} content stalls`;
-    const summary = `Creator-style ${style} reel combining ${filter} tension with ${emotion} trigger for ${geoTag} audiences.`;
-    const adaptation = `Use your brand POV: "Growing up between cultures changed how I read ${niche}." Keep ${format.toLowerCase()} and open with a hot take.`;
+    const title = pickFrom(titleTemplates, i + seed);
+    const hook = pickFrom(hookTemplates, i + seed * 7);
+    const summary = `POV ${style} reel built on ${tension} with an ${emotion} trigger for ${geoTag} audiences.`;
+    const adaptation = `Rewrite in your voice: "${hook}". Keep it ${format.toLowerCase()} and lean into ${tension.toLowerCase()} with a bold, real-life delivery.`;
 
     ideas.push({
       title,
@@ -151,9 +185,9 @@ export function createTrendScoutFeed({
         tension_point: tension,
         format
       },
-      text_overlay_breakdown: `Line1: "${hook}". Line2: "Nobody says this out loud". Line3: "Comment your take".`,
-      caption_analysis: "Short opinionated CTA caption that invites public disagreement to increase comments.",
-      hashtag_analysis: `Mix ${niche} + viral tags, prioritizing conflict and identity keywords for ${geography}.`,
+      text_overlay_breakdown: `Line1: "${hook}". Line2: "Be honest… who’s wrong?". Line3: "Comment your take".`,
+      caption_analysis: "Short, slightly provocative caption that invites disagreement (ego/identity trigger) for comments.",
+      hashtag_analysis: `Mix niche + identity + viral tags; include Arab/Moroccan identity plus dating/power-dynamic tags for ${geography}.`,
       adaptation_for_user: adaptation,
       timestamp: new Date(Date.now() - hoursSincePosted * 3600000).toISOString(),
       freshness
@@ -161,7 +195,7 @@ export function createTrendScoutFeed({
   }
 
   return ideas
-    .filter((item) => item.niche_relevance_score >= 7)
+    .filter((item) => item.niche_relevance_score >= 8)
     .sort((a, b) =>
       b.niche_relevance_score - a.niche_relevance_score ||
       b.engagement_velocity_score - a.engagement_velocity_score

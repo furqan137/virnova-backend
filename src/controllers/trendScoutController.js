@@ -3,6 +3,7 @@ import { TrendScoutItem } from "../models/TrendScoutItem.js";
 import { createTrendScoutFeed, buildTrendScoutPrompt } from "../services/trendScoutEngine.js";
 import { WAVESPEED_TREND_SCOUT_MODEL } from "../config/wavespeed.js";
 import { generateStrictJson, MASTER_SYSTEM_PROMPT } from "../services/llmClient.js";
+import { CLIENT_NICHE_HIDDEN_CONTEXT, hasClientNicheSignals } from "../services/clientNiche.js";
 
 const ALLOWED_SUB_NICHE_FILTERS = new Set([
   "cultural duality",
@@ -37,6 +38,7 @@ function normalizeScoutItem(doc) {
     share_rate: item.share_rate,
     summary: item.summary,
     why_it_works: item.why_it_works,
+    emotion_trigger_tag: item?.why_it_works?.emotion_trigger || "",
     text_overlay_breakdown: item.text_overlay_breakdown,
     caption_analysis: item.caption_analysis,
     hashtag_analysis: item.hashtag_analysis,
@@ -49,6 +51,24 @@ function normalizeScoutItem(doc) {
     content_styles: item.content_styles,
     geography: item.geography
   };
+}
+
+function isTrendItemStrongForClientNiche(item) {
+  const combined = [
+    item?.title,
+    item?.hook,
+    item?.summary,
+    item?.adaptation_for_user,
+    item?.why_it_works?.emotion_trigger,
+    item?.why_it_works?.tension_point
+  ]
+    .map((v) => String(v || ""))
+    .join(" ");
+
+  const nicheScore = Number(item?.niche_relevance_score || 0);
+  if (Number.isNaN(nicheScore) || nicheScore < 8) return false;
+  if (!hasClientNicheSignals(combined)) return false;
+  return true;
 }
 
 export async function generateTrendScoutFeed(req, res) {
@@ -75,12 +95,12 @@ export async function generateTrendScoutFeed(req, res) {
     // but falls back to deterministic simulation if the provider fails.
     let generated = [];
     try {
-      const prompt = buildTrendScoutPrompt({
+      const prompt = `${CLIENT_NICHE_HIDDEN_CONTEXT}\n\n${buildTrendScoutPrompt({
         niche: niche.trim(),
         subNicheFilters,
         contentStyles,
         geography: normalizedGeo
-      });
+      })}`;
       const llm = await generateStrictJson({
         systemPrompt: MASTER_SYSTEM_PROMPT,
         userPrompt: prompt,
@@ -89,7 +109,8 @@ export async function generateTrendScoutFeed(req, res) {
         max_tokens: 2400,
         retries: 1,
         validate(parsed) {
-          return Array.isArray(parsed) && parsed.length >= 6;
+          if (!Array.isArray(parsed) || parsed.length < 6) return false;
+          return parsed.every(isTrendItemStrongForClientNiche);
         }
       });
       if (Array.isArray(llm?.parsed)) {
@@ -142,7 +163,7 @@ export async function generateTrendScoutFeed(req, res) {
 
     const normalized = created
       .map(normalizeScoutItem)
-      .filter((item) => item.niche_relevance_score >= 7)
+      .filter(isTrendItemStrongForClientNiche)
       .sort(
         (a, b) =>
           b.niche_relevance_score - a.niche_relevance_score ||

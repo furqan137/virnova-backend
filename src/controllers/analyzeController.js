@@ -4,6 +4,7 @@ import {
   MissingApiKeyError,
   requestTrendAnalysis
 } from "../services/wavespeedService.js";
+import { CLIENT_NICHE_HIDDEN_CONTEXT } from "../services/clientNiche.js";
 
 function buildAnalyzePrompt({ niche, links }) {
   const linkText = links.length
@@ -12,7 +13,14 @@ function buildAnalyzePrompt({ niche, links }) {
 
   return `You are a viral content expert.
 
+${CLIENT_NICHE_HIDDEN_CONTEXT}
+
 Analyze trends for ${niche} niche and return JSON with hooks, keywords, emotional triggers, engagement rate, and virality score.
+
+Your analysis MUST be specific to this niche:
+- Explain which emotional triggers (ego/anger/identity/jealousy) are used
+- Explain which tensions are present (culture clash, gender roles, money/provider mindset, loyalty/status, religion vs modern)
+- Reject generic insights
 
 Input links:
 ${linkText}
