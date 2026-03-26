@@ -17,6 +17,31 @@ function validatePayload(value) {
   return { valid: missing.length === 0, missing };
 }
 
+function safeParse(text) {
+  const source = String(text || "");
+  try {
+    return JSON.parse(source);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[generate-script-from-trend] JSON ERROR:", e?.message || e);
+    const cleaned = source
+      .replace(/```json/gi, "")
+      .replace(/```/g, "")
+      .trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      const match = cleaned.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (!match) return null;
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        return null;
+      }
+    }
+  }
+}
+
 function normalizeResult(value, trend) {
   const base = value && typeof value === "object" ? value : {};
   const hook = String(base.hook || trend?.hook || "").trim() || "POV: he said 50/50, so I laughed";
@@ -63,6 +88,8 @@ function normalizeResult(value, trend) {
 
 export async function generateScriptFromTrend(req, res) {
   const trend = req.body?.trend;
+  // eslint-disable-next-line no-console
+  console.log("[generate-script-from-trend] REQUEST RECEIVED:", req.body);
   if (!trend || typeof trend !== "object") {
     return res.status(400).json({ success: false, error: "trend object is required" });
   }
@@ -123,9 +150,12 @@ RULES:
     });
 
     // eslint-disable-next-line no-console
-    console.log("[generate-script-from-trend] LLM RESPONSE:", raw);
+    console.log("[generate-script-from-trend] RAW LLM RESPONSE:", raw);
+    const parsedSafe = parsed || safeParse(raw);
+    // eslint-disable-next-line no-console
+    console.log("[generate-script-from-trend] PARSED RESPONSE:", parsedSafe);
 
-    const normalized = normalizeResult(parsed, trend);
+    const normalized = normalizeResult(parsedSafe, trend);
     const validation = validatePayload(normalized);
     if (!validation.valid) {
       const fallback = normalizeResult(
