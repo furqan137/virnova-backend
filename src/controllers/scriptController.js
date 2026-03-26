@@ -577,10 +577,18 @@ ${JSON.stringify(normalized)}
       data: normalized
     });
   } catch (error) {
-    console.error("[generate-script] error", error?.message || error);
+    const message = String(error?.message || error || "API error");
+    console.error("[generate-script] error", message);
+    if (message.toLowerCase().includes("connection error")) {
+      return res.status(502).json({
+        success: false,
+        error: "LLM connection error",
+        hint: "Check WAVESPEED_API_KEY, WAVESPEED_BASE_URL, and whether llm.wavespeed.ai is reachable from your server."
+      });
+    }
     return res.status(500).json({
       success: false,
-      error: error?.message || "API error"
+      error: message
     });
   }
 }

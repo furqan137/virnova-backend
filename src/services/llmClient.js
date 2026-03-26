@@ -1,5 +1,10 @@
 import OpenAI from "openai";
-import { getWavespeedApiKey, WAVESPEED_BASE_URL, WAVESPEED_MODEL } from "../config/wavespeed.js";
+import {
+  getWavespeedApiKey,
+  WAVESPEED_BASE_URL,
+  WAVESPEED_FALLBACK_MODEL,
+  WAVESPEED_MODEL
+} from "../config/wavespeed.js";
 
 export const MASTER_SYSTEM_PROMPT = `You are an elite viral content strategist AI.
 
@@ -71,7 +76,25 @@ function looksGeneric(text) {
 function createClient() {
   const apiKey = getWavespeedApiKey();
   if (!apiKey) throw new MissingApiKeyError();
-  return new OpenAI({ apiKey, baseURL: WAVESPEED_BASE_URL });
+  return new OpenAI({
+    apiKey,
+    baseURL: WAVESPEED_BASE_URL,
+    timeout: 60_000,
+    maxRetries: 1
+  });
+}
+
+function isLikelyModelError(error) {
+  const status = error?.status ?? error?.response?.status;
+  const msg = String(error?.message || "").toLowerCase();
+  return (
+    status === 400 ||
+    status === 404 ||
+    msg.includes("model") ||
+    msg.includes("not found") ||
+    msg.includes("unsupported") ||
+    msg.includes("does not exist")
+  );
 }
 
 export async function chatCompletion({
@@ -81,12 +104,29 @@ export async function chatCompletion({
   max_tokens = 2000
 }) {
   const client = createClient();
-  return await client.chat.completions.create({
-    model,
-    messages,
-    temperature,
-    max_tokens
-  });
+  try {
+    return await client.chat.completions.create({
+      model,
+      messages,
+      temperature,
+      max_tokens
+    });
+  } catch (error) {
+    const fallback = WAVESPEED_FALLBACK_MODEL;
+    const canFallback = fallback && fallback !== model && isLikelyModelError(error);
+    if (!canFallback) throw error;
+    // eslint-disable-next-line no-console
+    console.warn("[llm] primary model failed, retrying with fallback", {
+      primary: model,
+      fallback
+    });
+    return await client.chat.completions.create({
+      model: fallback,
+      messages,
+      temperature: Math.max(0.5, temperature - 0.2),
+      max_tokens
+    });
+  }
 }
 
 /**
