@@ -400,6 +400,76 @@ function mergeScriptParts(base, patch) {
   };
 }
 
+function validateTrendScriptPayload(value) {
+  if (!value || typeof value !== "object") return { valid: false, missing: ["root"] };
+  const missing = [];
+  if (isBlank(value.hook)) missing.push("hook");
+  if (isBlank(value.script)) missing.push("script");
+  if (isBlank(value.loop_ending)) missing.push("loop_ending");
+  if (isBlank(value.caption)) missing.push("caption");
+  if (!Array.isArray(value.hashtags) || value.hashtags.length < 5) missing.push("hashtags(>=5)");
+  if (!Array.isArray(value.scenes) || value.scenes.length < 2) missing.push("scenes(>=2)");
+  else {
+    value.scenes.slice(0, 6).forEach((scene, idx) => {
+      if (!scene || typeof scene !== "object") {
+        missing.push(`scenes[${idx}]`);
+        return;
+      }
+      if (isBlank(scene.scene) && isBlank(scene.scene_number)) missing.push(`scenes[${idx}].scene`);
+      if (isBlank(scene.visual) && isBlank(scene.visual_prompt)) missing.push(`scenes[${idx}].visual`);
+      if (isBlank(scene.text_overlay) && isBlank(scene.overlay_text)) missing.push(`scenes[${idx}].text_overlay`);
+      if (isBlank(scene.camera) && isBlank(scene.camera_movement)) missing.push(`scenes[${idx}].camera`);
+      if (isBlank(scene.voiceover) && isBlank(scene.voiceover_line)) missing.push(`scenes[${idx}].voiceover`);
+    });
+  }
+  return { valid: missing.length === 0, missing };
+}
+
+function normalizeTrendScriptResult(value, trend) {
+  const base = value && typeof value === "object" ? value : {};
+  const trendHook = String(trend?.hook || "").trim();
+  const hook = String(base.hook || trendHook).trim() || trendHook || "POV: you said 50/50 and I laughed";
+  const script = String(base.script || base.voiceover || "").trim() || String(trend?.adaptation_for_user || "").trim();
+  const caption = String(base.caption || "").trim() || "some of you still don’t get it 😅";
+  const loop_ending = String(base.loop_ending || base.loopEnding || "").trim() || `Watch again from "${hook.split(/\s+/).slice(0, 4).join(" ")}"`;
+  const hashtags = Array.isArray(base.hashtags) ? base.hashtags.map((t) => String(t || "").trim()).filter(Boolean) : [];
+  while (hashtags.length < 5) hashtags.push(`#reels${hashtags.length + 1}`);
+
+  const scenesIn = Array.isArray(base.scenes) ? base.scenes : [];
+  const scenes = scenesIn
+    .filter((s) => s && typeof s === "object")
+    .map((s, idx) => ({
+      scene: Number(s.scene ?? s.scene_number) || idx + 1,
+      visual: String(s.visual || s.visual_prompt || "").trim() || `Front cam selfie in car, confident expression, luxury vibe, natural light, slight handheld motion.`,
+      voiceover: String(s.voiceover || s.voiceover_line || "").trim() || "",
+      text_overlay: String(s.text_overlay || s.overlay_text || s.textOverlay || "").trim() || hook,
+      camera: String(s.camera || s.camera_movement || s.camera_style || "").trim() || "Front camera selfie, slight handheld movement"
+    }));
+  while (scenes.length < 3) {
+    scenes.push({
+      scene: scenes.length + 1,
+      visual: "Mirror selfie in elevator, clean luxury outfit, phone held up, subtle smirk, soft lighting, handheld.",
+      voiceover: scenes.length === 0 ? script : "Say it with your chest. Standards aren’t ‘toxic’. They’re expensive.",
+      text_overlay: scenes.length === 0 ? hook : "Be honest… who’s wrong?",
+      camera: "Front cam / mirror selfie, slight movement"
+    });
+  }
+
+  // Ensure voiceover lines exist per scene by slicing script lines.
+  const lines = script.split("\n").map((l) => l.trim()).filter(Boolean);
+  return {
+    hook,
+    script,
+    scenes: scenes.slice(0, 4).map((s, idx) => ({
+      ...s,
+      voiceover: s.voiceover || lines[idx] || lines[0] || script
+    })),
+    caption,
+    hashtags: hashtags.slice(0, 8),
+    loop_ending
+  };
+}
+
 export async function generateScriptFromLlm(req, res) {
   const {
     niche,
@@ -462,72 +532,32 @@ ${creatorPreset.systemAddendum || "- None"}
 ${CLIENT_NICHE_HIDDEN_CONTEXT}
 
 Return STRICT JSON format:
-
 {
-"niche": "",
-"hook": "",
-"hook_variations": ["", "", ""],
-"script": "",
-"scenes": [
-  {
-    "scene_number": 1,
-    "visual_prompt": "",
-    "camera_movement": "",
-    "lighting": "",
-    "mood": "",
-    "subject_action": "",
-    "text_overlay": ""
-  }
-],
-"loop_ending": "",
-"caption": "",
-"hashtags": []
+  "hook": "",
+  "hook_variations": ["", "", ""],
+  "script": "",
+  "scenes": [
+    {
+      "scene_number": 1,
+      "visual_prompt": "",
+      "camera_movement": "",
+      "lighting": "",
+      "mood": "",
+      "subject_action": "",
+      "text_overlay": ""
+    }
+  ],
+  "loop_ending": "",
+  "caption": "",
+  "hashtags": []
 }
 
 Rules:
 - Create 3 scenes.
-- All content must align strictly to the selected niche AND creator style.
-- Generate exactly 3 hook variations under "hook_variations".
-- Each hook must be 5 to 10 words.
-- Hooks must trigger ego/anger/curiosity in the first 1–2 seconds.
-- If ragebait mode is enabled:
-  - Hook: controversial opinion/debate/comparison framing such as "X is better than Y", "People are wrong about this", or "This will trigger you...".
-  - Script: debate-style, emotionally charged, provocative but policy-safe.
-  - Caption: emotional reaction bait with clear "agree/disagree" comment CTA.
-- If ragebait mode is disabled:
-  - Hook: bold POV hooks (NOT educational).
-  - Script: confident POV talking-head tone (NOT educational).
-  - Caption: short, mysterious, sometimes sarcastic (NOT explanatory).
-- Keep hooks engaging, provocative, and policy-safe: no hate, abuse, or targeted harassment.
-- If reference viral content is provided, first analyze its structure and then mimic its style, pacing, and tone.
-- If reference viral content is provided:
-  - mimic influencer storytelling style and personality
-  - maintain POV talking format
-  - reflect lifestyle aesthetic and strong creator identity
-  - avoid robotic wording
-- If no reference viral content is provided, use general viral patterns for short-form content.
-- Platform tuning:
-  - TikTok: use more aggressive hooks and faster pacing with stronger pattern interrupts.
-  - Instagram Reels: use cleaner style, smoother pacing, and more aesthetic visual framing.
-  - For Instagram Reels specifically, make content POV/opinion-led with real influencer delivery.
-- Instagram-style creator rules:
-  - Use confident, bold, slightly provocative influencer tone.
-  - Keep language Gen-Z, direct speaking, and high-engagement.
-  - Make hooks emotional + controversial while staying policy-safe.
-  - Keep the whole reel in short-form 6-10 seconds total.
-  - Avoid generic lines; make it feel like a real creator talking to camera.
-- Scenes MUST feel like real Instagram creator clips:
-  - Realistic environments: car, kitchen, mirror selfie, date setup, hotel lobby, elevator, café.
-  - Natural camera: front cam selfie, mirror selfie, casual vlog; slight handheld movement.
-  - Overlay text must look like IG text overlays (short, punchy, emotional).
-  - Each "visual_prompt" must be AI-video-tool ready but grounded in realistic creator filming.
-  - Each "visual_prompt" must explicitly include: environment + wardrobe + lighting + camera + motion + emotion.
-- Script must be short lines (use line breaks), POV, slightly toxic/teasing but policy-safe.
-- The final scene must naturally set up replay to improve looping retention.
-- "loop_ending" must connect back to the hook, create curiosity, and explicitly encourage rewatch.
-- Make the ending feel like it naturally loops into the beginning.
-- "hashtags" must be an array of 5 to 8 relevant strings (mix viral + niche).
-- Return ONLY pure JSON, with no markdown, no explanations, and no extra text before/after.
+- No empty fields. No text outside JSON.
+- Hooks must be 5 to 10 words, POV/opinion, emotionally triggering.
+- Scenes must be realistic creator clips (car/kitchen/mirror selfie/date setup) and video-tool ready.
+- Each scene must include: visual_prompt + camera_movement + lighting + mood + subject_action + text_overlay.
 `.trim();
 
   try {
