@@ -321,17 +321,35 @@ function normalizeScriptResult(value, fallbackText = "", ragebaitMode = false, t
   const inputScenes = Array.isArray(baseValue.scenes) ? baseValue.scenes : [];
   const normalizedScenes = inputScenes
     .filter((scene) => scene && typeof scene === "object")
-    .map((scene, index) => ({
-      scene_number: Number(scene.scene_number) || index + 1,
-      visual_prompt:
+    .map((scene, index) => {
+      // Support both schema variants:
+      // - legacy: scene_number/camera_movement/lighting/mood/subject_action/text_overlay
+      // - creator: scene/camera/overlay_text (+ visual_prompt)
+      const sceneNum = Number(scene.scene_number ?? scene.scene) || index + 1;
+      const visualPrompt =
         String(scene.visual_prompt || "").trim() ||
-        `Cinematic rooftop shot for ${topic}, luxury styling, dramatic composition, rich color grade, intense expression.`,
-      camera_movement: String(scene.camera_movement || scene.camera_style || "").trim() || "Slow cinematic zoom with subtle handheld drift",
-      lighting: String(scene.lighting || "").trim() || "Golden hour backlight with soft rim lighting",
-      mood: String(scene.mood || "").trim() || "Confident and energetic",
-      subject_action: String(scene.subject_action || "").trim() || "Creator addresses camera with assertive POV statement",
-      text_overlay: String(scene.text_overlay || "").trim() || `Scene ${index + 1}`
-    }));
+        `Realistic creator selfie clip about ${topic}, premium outfit, natural handheld motion, strong emotion, cinematic grading.`;
+
+      const cameraMovement = String(scene.camera_movement || scene.camera_style || scene.camera || "").trim() || "Front camera selfie, slight handheld movement";
+      const overlay = String(scene.text_overlay || scene.overlay_text || "").trim() || `POV: ${topic}`.slice(0, 48);
+
+      // If creator schema is used, these may be missing—fill with safe defaults so validation passes.
+      const lighting = String(scene.lighting || "").trim() || "Natural window light with soft contrast";
+      const mood = String(scene.mood || "").trim() || "Confident, slightly provocative";
+      const subjectAction =
+        String(scene.subject_action || "").trim() ||
+        "Creator looks into camera, delivers a bold POV line, subtle smirk, controlled energy";
+
+      return {
+        scene_number: sceneNum,
+        visual_prompt: visualPrompt,
+        camera_movement: cameraMovement,
+        lighting,
+        mood,
+        subject_action: subjectAction,
+        text_overlay: overlay
+      };
+    });
 
   while (normalizedScenes.length < 2) {
     const sceneIndex = normalizedScenes.length + 1;
@@ -452,10 +470,13 @@ Return STRICT JSON format:
 "script": "",
 "scenes": [
   {
-    "scene": 1,
+    "scene_number": 1,
     "visual_prompt": "",
-    "camera": "",
-    "overlay_text": ""
+    "camera_movement": "",
+    "lighting": "",
+    "mood": "",
+    "subject_action": "",
+    "text_overlay": ""
   }
 ],
 "loop_ending": "",
