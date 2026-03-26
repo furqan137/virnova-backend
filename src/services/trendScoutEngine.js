@@ -21,6 +21,67 @@ function buildFreshness(hours) {
   return "AGING";
 }
 
+export function buildTrendScoutPrompt({ niche, subNicheFilters = [], contentStyles = [], geography = "US", minItems = 10, maxItems = 20 }) {
+  const filters = subNicheFilters.length ? subNicheFilters.join(", ") : "cultural duality, controversial opinions";
+  const styles = contentStyles.length ? contentStyles.join(", ") : "POV, ragebait, text-overlay reels";
+  const itemCount = Math.max(minItems, Math.min(maxItems, 14));
+
+  return `
+Generate ${itemCount} Trend Scout ideas as STRICT JSON array.
+
+Constraints:
+- NO scraping. This is simulated trend discovery + pattern analysis.
+- Must feel like CURRENTLY viral Instagram Reels content.
+- Niche must be extremely specific: ${niche}
+- Sub-niche filters: ${filters}
+- Content styles: ${styles}
+- Geography context: ${geography}
+
+Output schema (no empty fields allowed):
+[
+  {
+    "title": "",
+    "hook": "",
+    "content_type": "POV",
+    "niche_relevance_score": 7,
+    "engagement_velocity_score": 0,
+    "virality_status": "LOW",
+    "estimated_views": 0,
+    "hours_since_posted": 1,
+    "comment_rate": 0.02,
+    "share_rate": 0.02,
+    "summary": "",
+    "why_it_works": {
+      "hook_type": "",
+      "emotion_trigger": "",
+      "tension_point": "",
+      "format": ""
+    },
+    "text_overlay_breakdown": "",
+    "caption_analysis": "",
+    "hashtag_analysis": "",
+    "adaptation_for_user": "",
+    "timestamp": "",
+    "freshness": "NEW"
+  }
+]
+
+Rules:
+- Only return items with niche_relevance_score >= 7.
+- Hooks must be scroll-stopping POV/opinion hooks (short, punchy).
+- Simulate virality metrics realistically:
+  - estimated_views: 50,000 to 3,000,000
+  - hours_since_posted: 1 to 48
+  - comment_rate: 0.01 to 0.12
+  - share_rate: 0.01 to 0.10
+  - engagement_velocity_score: a rounded number that matches the above (higher for fresher posts)
+  - virality_status one of: LOW, MEDIUM, HIGH, EXPLODING
+  - freshness one of: NEW, TRENDING, AGING (based on hours_since_posted)
+- Avoid generic advice/education. This is trend ideas for creators.
+- Return ONLY pure JSON (no markdown, no extra text).
+`.trim();
+}
+
 export function createTrendScoutFeed({
   niche,
   subNicheFilters = [],

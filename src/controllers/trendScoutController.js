@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import { TrendScoutItem } from "../models/TrendScoutItem.js";
-import { createTrendScoutFeed } from "../services/trendScoutEngine.js";
+import { createTrendScoutFeed, buildTrendScoutPrompt } from "../services/trendScoutEngine.js";
+import { WAVESPEED_TREND_SCOUT_MODEL } from "../config/wavespeed.js";
+import { generateStrictJson, MASTER_SYSTEM_PROMPT } from "../services/llmClient.js";
 
 const ALLOWED_SUB_NICHE_FILTERS = new Set([
   "cultural duality",
@@ -69,12 +71,42 @@ export async function generateTrendScoutFeed(req, res) {
 
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
-    const generated = createTrendScoutFeed({
-      niche: niche.trim(),
-      subNicheFilters,
-      contentStyles,
-      geography: normalizedGeo
-    });
+    // Trend Scout uses a premium model (configurable) to produce higher-quality ideas,
+    // but falls back to deterministic simulation if the provider fails.
+    let generated = [];
+    try {
+      const prompt = buildTrendScoutPrompt({
+        niche: niche.trim(),
+        subNicheFilters,
+        contentStyles,
+        geography: normalizedGeo
+      });
+      const llm = await generateStrictJson({
+        systemPrompt: MASTER_SYSTEM_PROMPT,
+        userPrompt: prompt,
+        model: WAVESPEED_TREND_SCOUT_MODEL,
+        temperature: 0.7,
+        max_tokens: 2400,
+        retries: 1,
+        validate(parsed) {
+          return Array.isArray(parsed) && parsed.length >= 6;
+        }
+      });
+      if (Array.isArray(llm?.parsed)) {
+        generated = llm.parsed;
+      }
+    } catch (_error) {
+      generated = [];
+    }
+
+    if (!generated.length) {
+      generated = createTrendScoutFeed({
+        niche: niche.trim(),
+        subNicheFilters,
+        contentStyles,
+        geography: normalizedGeo
+      });
+    }
 
     const batchId = new mongoose.Types.ObjectId().toString();
     const created = [];
