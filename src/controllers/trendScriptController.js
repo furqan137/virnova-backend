@@ -17,6 +17,34 @@ const DEFAULT_ANGLES = [
   "Soft landing — comment bait CTA"
 ];
 
+const DEFAULT_SCENE_CAMERA = "Close-up on face, slight handheld micro-shake, punchy TikTok pacing";
+
+function isGenericVideoPrompt(text) {
+  const t = String(text || "").trim();
+  if (t.length < 85) return true;
+  return /\ba person doing something|someone doing something|generic (person|scene|video)|\bTBD\b|\blorem\b|placeholder/i.test(
+    t
+  );
+}
+
+function synthesizeVideoPrompt({ visual, dialogue, caption, emotion, camera }) {
+  const cam = String(camera || DEFAULT_SCENE_CAMERA).trim();
+  const dia = String(dialogue || "").replace(/\s+/g, " ").trim().slice(0, 140);
+  const cap = String(caption || "").replace(/\s+/g, " ").trim().slice(0, 72);
+  const vis = String(visual || "").replace(/\s+/g, " ").trim();
+  const em = String(emotion || "tension").trim();
+  return (
+    `Vertical 9:16 video, realistic cinematic style, high detail, natural skin texture, no watermarks. ` +
+    `${vis} ` +
+    `Subject delivers energy matching this spoken POV: "${dia}". ` +
+    `Emotional read: ${em}. ` +
+    `On-screen text vibe: "${cap}". ` +
+    `Camera: ${cam}. ` +
+    `Natural or motivated lighting with soft shadows and gentle contrast. ` +
+    `Shallow depth of field, background slightly blurred, filmic color grade.`
+  );
+}
+
 function isBlank(value) {
   return value === null || value === undefined || String(value).trim() === "";
 }
@@ -59,13 +87,31 @@ function validateLlmPayload(obj) {
 
 function normalizeScene(raw, idx, trendHook) {
   const label = String(raw?.label || SCENE_LABELS[idx] || `Scene ${idx + 1}`).trim() || SCENE_LABELS[idx];
+  const visual =
+    String(raw?.visual || "").trim() || "Tight face cam, natural light, fast energy, handheld.";
+  const dialogue =
+    String(raw?.dialogue || raw?.voiceover || "").trim() ||
+    String(trendHook || "").trim() ||
+    "You need to hear this.";
+  const caption = String(raw?.caption || raw?.text_overlay || "").trim() || "wait—";
+  const emotion = String(raw?.emotion || "").trim() || "curiosity";
+  const camera =
+    String(raw?.camera || raw?.camera_movement || raw?.camera_style || "").trim() || DEFAULT_SCENE_CAMERA;
+
+  let video_prompt = String(raw?.video_prompt || "").trim();
+  if (isBlank(video_prompt) || isGenericVideoPrompt(video_prompt)) {
+    video_prompt = synthesizeVideoPrompt({ visual, dialogue, caption, emotion, camera });
+  }
+
   return {
     scene: Number(raw?.scene) || idx + 1,
     label,
-    visual: String(raw?.visual || "").trim() || "Tight face cam, natural light, fast energy, handheld.",
-    dialogue: String(raw?.dialogue || raw?.voiceover || "").trim() || String(trendHook || "").trim() || "You need to hear this.",
-    caption: String(raw?.caption || raw?.text_overlay || "").trim() || "wait—",
-    emotion: String(raw?.emotion || "").trim() || "curiosity"
+    visual,
+    dialogue,
+    caption,
+    emotion,
+    camera,
+    video_prompt
   };
 }
 
@@ -87,13 +133,27 @@ function legacyToViralScripts(parsed, trend) {
   for (let i = 0; i < 6; i += 1) {
     const s = legacyScenes[i] || {};
     const vo = String(s.voiceover || lines[i] || lines[0] || hook).trim();
+    const vis = String(s.visual || "").trim() || "Front cam, bold energy, quick cuts.";
+    const cap = String(s.text_overlay || hook).trim() || "👀";
+    const emo = i === 0 ? "curiosity" : i === 4 ? "shock" : i === 5 ? "belonging" : "tension";
+    const cam =
+      String(s.camera || s.camera_movement || "").trim() ||
+      (i === 0 ? "Extreme close-up front cam, handheld" : "Medium close-up, quick reframing");
     scenes.push({
       scene: i + 1,
       label: SCENE_LABELS[i],
-      visual: String(s.visual || "").trim() || "Front cam, bold energy, quick cuts.",
+      visual: vis,
       dialogue: vo,
-      caption: String(s.text_overlay || hook).trim() || "👀",
-      emotion: i === 0 ? "curiosity" : i === 4 ? "shock" : i === 5 ? "belonging" : "tension"
+      caption: cap,
+      emotion: emo,
+      camera: cam,
+      video_prompt: synthesizeVideoPrompt({
+        visual: vis,
+        dialogue: vo,
+        caption: cap,
+        emotion: emo,
+        camera: cam
+      })
     });
   }
   return [
@@ -101,18 +161,38 @@ function legacyToViralScripts(parsed, trend) {
     {
       variation: 2,
       angle: DEFAULT_ANGLES[1],
-      scenes: scenes.map((sc, j) => ({
-        ...sc,
-        dialogue: j === 2 ? `${sc.dialogue} (beat—wrong take?)` : sc.dialogue
-      }))
+      scenes: scenes.map((sc, j) => {
+        const dialogue = j === 2 ? `${sc.dialogue} (beat—wrong take?)` : sc.dialogue;
+        return {
+          ...sc,
+          dialogue,
+          video_prompt: synthesizeVideoPrompt({
+            visual: sc.visual,
+            dialogue,
+            caption: sc.caption,
+            emotion: sc.emotion,
+            camera: sc.camera
+          })
+        };
+      })
     },
     {
       variation: 3,
       angle: DEFAULT_ANGLES[2],
-      scenes: scenes.map((sc, j) => ({
-        ...sc,
-        dialogue: j === 5 ? `${sc.dialogue} Comment if you felt this.` : sc.dialogue
-      }))
+      scenes: scenes.map((sc, j) => {
+        const dialogue = j === 5 ? `${sc.dialogue} Comment if you felt this.` : sc.dialogue;
+        return {
+          ...sc,
+          dialogue,
+          video_prompt: synthesizeVideoPrompt({
+            visual: sc.visual,
+            dialogue,
+            caption: sc.caption,
+            emotion: sc.emotion,
+            camera: sc.camera
+          })
+        };
+      })
     }
   ];
 }
@@ -135,16 +215,25 @@ function ensureThreeViralScripts(viral_scripts, trend, parsed) {
     normalized.push({
       variation: i + 1,
       angle: DEFAULT_ANGLES[i] || `Script ${i + 1}`,
-      scenes: cloneFrom.scenes.map((sc, j) => ({
-        ...sc,
-        scene: j + 1,
-        dialogue:
+      scenes: cloneFrom.scenes.map((sc, j) => {
+        const dialogue =
           j === 1
             ? `${sc.dialogue} (hard cut—new angle)`
             : j === 4
               ? `${sc.dialogue} Plot twist.`
-              : sc.dialogue
-      }))
+              : sc.dialogue;
+        const next = { ...sc, scene: j + 1, dialogue };
+        return {
+          ...next,
+          video_prompt: synthesizeVideoPrompt({
+            visual: next.visual,
+            dialogue: next.dialogue,
+            caption: next.caption,
+            emotion: next.emotion,
+            camera: next.camera
+          })
+        };
+      })
     });
   }
   return normalized.slice(0, 3).map((v, idx) => ({
@@ -166,7 +255,9 @@ function buildFormattedExport(topic, viral_scripts, caption, hashtags) {
       lines.push(`- Visual: ${sc.visual}`);
       lines.push(`- Dialogue/Voiceover: ${sc.dialogue}`);
       lines.push(`- Caption/Text on screen: ${sc.caption}`);
+      lines.push(`- Camera: ${sc.camera || DEFAULT_SCENE_CAMERA}`);
       lines.push(`- Emotion: ${sc.emotion}`);
+      lines.push(`- AI video prompt (Runway/Pika/Sora-ready): ${sc.video_prompt || ""}`);
       lines.push("");
     });
   });
@@ -193,7 +284,8 @@ function normalizeResult(parsed, trend) {
     visual: s.visual,
     voiceover: s.dialogue,
     text_overlay: s.caption,
-    camera: "Fast cuts / handheld — match viral TikTok pacing",
+    camera: s.camera || DEFAULT_SCENE_CAMERA,
+    video_prompt: s.video_prompt,
     label: s.label,
     emotion: s.emotion
   }));
@@ -213,7 +305,7 @@ function normalizeResult(parsed, trend) {
   const uniq = [...new Set(hashtags)];
   while (uniq.length < 5) uniq.push(`#fyp${uniq.length + 1}`);
 
-  const formatted_export = String(base.formatted_export || "").trim() || buildFormattedExport(topic, viral_scripts, caption, uniq);
+  const formatted_export = buildFormattedExport(topic, viral_scripts, caption, uniq);
 
   return {
     topic,
@@ -242,6 +334,10 @@ function validateNormalized(value) {
           if (isBlank(sc.dialogue)) missing.push(`s${i + 1}.${j}.dialogue`);
           if (isBlank(sc.caption)) missing.push(`s${i + 1}.${j}.caption`);
           if (isBlank(sc.emotion)) missing.push(`s${i + 1}.${j}.emotion`);
+          if (isBlank(sc.camera)) missing.push(`s${i + 1}.${j}.camera`);
+          if (isBlank(sc.video_prompt) || isGenericVideoPrompt(sc.video_prompt)) {
+            missing.push(`s${i + 1}.${j}.video_prompt`);
+          }
         });
       }
     });
@@ -274,6 +370,8 @@ RULES:
 - NEVER use: "Welcome back", "In this video", "Today we're going to", "As you can see", "Let's dive in"
 - Short punchy lines; sound HUMAN; include at least one pattern interrupt (unexpected beat) per script
 - Strong curiosity gaps + storytelling; vary tone across the 3 scripts (e.g. direct POV vs twist vs softer CTA)
+- For EACH scene you MUST output "camera" (shot type + movement) and "video_prompt": a single highly detailed, cinematic, ready-to-paste AI video generation prompt for tools like Runway, Pika, or Sora.
+- Each video_prompt MUST: state vertical 9:16; describe environment, subject, wardrobe if visible, expression, emotion, camera angle/movement, lighting, realistic/cinematic style; be specific (NO placeholders, NO "a person doing something"); align with that scene's visual, dialogue, caption, and emotion.
 
 ${CLIENT_NICHE_HIDDEN_CONTEXT}
 
@@ -301,7 +399,9 @@ Schema:
           "visual": "",
           "dialogue": "",
           "caption": "",
-          "emotion": ""
+          "emotion": "",
+          "camera": "",
+          "video_prompt": ""
         },
         {
           "scene": 2,
@@ -309,7 +409,9 @@ Schema:
           "visual": "",
           "dialogue": "",
           "caption": "",
-          "emotion": ""
+          "emotion": "",
+          "camera": "",
+          "video_prompt": ""
         },
         {
           "scene": 3,
@@ -317,7 +419,9 @@ Schema:
           "visual": "",
           "dialogue": "",
           "caption": "",
-          "emotion": ""
+          "emotion": "",
+          "camera": "",
+          "video_prompt": ""
         },
         {
           "scene": 4,
@@ -325,7 +429,9 @@ Schema:
           "visual": "",
           "dialogue": "",
           "caption": "",
-          "emotion": ""
+          "emotion": "",
+          "camera": "",
+          "video_prompt": ""
         },
         {
           "scene": 5,
@@ -333,7 +439,9 @@ Schema:
           "visual": "",
           "dialogue": "",
           "caption": "",
-          "emotion": ""
+          "emotion": "",
+          "camera": "",
+          "video_prompt": ""
         },
         {
           "scene": 6,
@@ -341,7 +449,9 @@ Schema:
           "visual": "",
           "dialogue": "",
           "caption": "",
-          "emotion": ""
+          "emotion": "",
+          "camera": "",
+          "video_prompt": ""
         }
       ]
     },
@@ -356,10 +466,11 @@ Schema:
 Hard requirements:
 - Exactly 3 objects in viral_scripts
 - Each scenes array MUST have exactly 6 objects in order (hook → … → CTA)
-- Every visual, dialogue, caption, emotion must be non-empty strings
+- Every visual, dialogue, caption, emotion, camera, video_prompt must be non-empty strings
 - dialogue = exact spoken line / voiceover (natural, viral)
 - caption = short on-screen text
 - emotion = one word or short phrase (e.g. curiosity, shock, anger, hope, guilt, belonging)
+- video_prompt = one paragraph, paste-ready for AI video generators (see rules above)
 `.trim();
 
   const fallbackPayload = {
@@ -383,7 +494,7 @@ Hard requirements:
       userPrompt: prompt,
       model: WAVESPEED_TREND_SCOUT_MODEL,
       temperature: 0.75,
-      max_tokens: 5000,
+      max_tokens: 5600,
       retries: 2,
       validate: (obj) => validateLlmPayload(obj),
       enforceGenericCheck: false
