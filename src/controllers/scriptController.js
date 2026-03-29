@@ -83,6 +83,29 @@ function isBlank(value) {
   return value === null || value === undefined || String(value).trim() === "";
 }
 
+function isGenericVideoPromptText(text) {
+  const t = String(text || "").trim();
+  if (t.length < 85) return true;
+  return /\ba person doing something|someone doing something|generic (person|scene|video)|\bTBD\b|\blorem\b|placeholder/i.test(
+    t
+  );
+}
+
+function buildAiVideoPromptFromSceneFields(scene) {
+  const vp = String(scene.visual_prompt || "").trim();
+  const sub = String(scene.subject_action || "").trim();
+  const mood = String(scene.mood || "").trim();
+  const cam = String(scene.camera_movement || scene.camera_style || scene.camera || "").trim();
+  const light = String(scene.lighting || "").trim();
+  const overlay = String(scene.text_overlay || "").trim();
+  return (
+    `Vertical 9:16 video, realistic cinematic style, high detail, natural skin texture, no watermarks. ` +
+    `${vp} ${sub} Emotional tone: ${mood}. Camera: ${cam}. Lighting: ${light}. ` +
+    `On-screen text overlay concept: "${overlay.slice(0, 96)}". ` +
+    `Shallow depth of field, background slightly blurred, filmic color grade.`
+  );
+}
+
 function inferReferenceStyle(referenceText = "") {
   const text = String(referenceText || "").toLowerCase();
   if (!text.trim()) {
@@ -139,6 +162,9 @@ function validateStructuredPayload(value) {
       if (isBlank(scene.mood)) missing.push(`scenes[${index}].mood`);
       if (isBlank(scene.subject_action)) missing.push(`scenes[${index}].subject_action`);
       if (isBlank(scene.text_overlay)) missing.push(`scenes[${index}].text_overlay`);
+      if (isBlank(scene.video_prompt) || isGenericVideoPromptText(scene.video_prompt)) {
+        missing.push(`scenes[${index}].video_prompt`);
+      }
     });
   }
 
@@ -340,7 +366,7 @@ function normalizeScriptResult(value, fallbackText = "", ragebaitMode = false, t
         String(scene.subject_action || "").trim() ||
         "Creator looks into camera, delivers a bold POV line, subtle smirk, controlled energy";
 
-      return {
+      const baseScene = {
         scene_number: sceneNum,
         visual_prompt: visualPrompt,
         camera_movement: cameraMovement,
@@ -349,11 +375,16 @@ function normalizeScriptResult(value, fallbackText = "", ragebaitMode = false, t
         subject_action: subjectAction,
         text_overlay: overlay
       };
+      let video_prompt = String(scene.video_prompt || "").trim();
+      if (isBlank(video_prompt) || isGenericVideoPromptText(video_prompt)) {
+        video_prompt = buildAiVideoPromptFromSceneFields(baseScene);
+      }
+      return { ...baseScene, video_prompt };
     });
 
   while (normalizedScenes.length < 2) {
     const sceneIndex = normalizedScenes.length + 1;
-    normalizedScenes.push({
+    const filler = {
       scene_number: sceneIndex,
       visual_prompt:
         sceneIndex === 1
@@ -364,6 +395,10 @@ function normalizeScriptResult(value, fallbackText = "", ragebaitMode = false, t
       mood: sceneIndex === 1 ? "Bold and provocative" : "Energetic and intense",
       subject_action: sceneIndex === 1 ? "Creator walks toward camera and delivers a direct hot take" : "Creator gestures emphatically while challenging common advice",
       text_overlay: sceneIndex === 1 ? "Watch this" : `Scene ${sceneIndex}`
+    };
+    normalizedScenes.push({
+      ...filler,
+      video_prompt: buildAiVideoPromptFromSceneFields(filler)
     });
   }
 
@@ -544,7 +579,8 @@ Return STRICT JSON format:
       "lighting": "",
       "mood": "",
       "subject_action": "",
-      "text_overlay": ""
+      "text_overlay": "",
+      "video_prompt": ""
     }
   ],
   "loop_ending": "",
@@ -557,7 +593,8 @@ Rules:
 - No empty fields. No text outside JSON.
 - Hooks must be 5 to 10 words, POV/opinion, emotionally triggering.
 - Scenes must be realistic creator clips (car/kitchen/mirror selfie/date setup) and video-tool ready.
-- Each scene must include: visual_prompt + camera_movement + lighting + mood + subject_action + text_overlay.
+- Each scene must include: visual_prompt + camera_movement + lighting + mood + subject_action + text_overlay + video_prompt.
+- video_prompt: one detailed AI video generation prompt (vertical 9:16, realistic/cinematic), describing environment, subject, expression, lighting, camera, style — paste-ready for Runway/Pika/Sora; no placeholders; never vague "a person doing something".
 `.trim();
 
   try {
