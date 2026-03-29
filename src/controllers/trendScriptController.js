@@ -1,20 +1,24 @@
 import { generateStrictJson, MASTER_SYSTEM_PROMPT } from "../services/llmClient.js";
 import { CLIENT_NICHE_HIDDEN_CONTEXT } from "../services/clientNiche.js";
+import { WAVESPEED_TREND_SCOUT_MODEL } from "../config/wavespeed.js";
+
+const SCENE_LABELS = [
+  "Hook - first 3 seconds",
+  "Scene 2",
+  "Scene 3",
+  "Scene 4",
+  "Climax / Twist",
+  "Ending / Call to Action"
+];
+
+const DEFAULT_ANGLES = [
+  "Direct POV — stop the scroll cold",
+  "Pattern interrupt — twist mid-video",
+  "Soft landing — comment bait CTA"
+];
 
 function isBlank(value) {
   return value === null || value === undefined || String(value).trim() === "";
-}
-
-function validatePayload(value) {
-  if (!value || typeof value !== "object") return { valid: false, missing: ["root"] };
-  const missing = [];
-  if (isBlank(value.hook)) missing.push("hook");
-  if (isBlank(value.script)) missing.push("script");
-  if (isBlank(value.loop_ending)) missing.push("loop_ending");
-  if (isBlank(value.caption)) missing.push("caption");
-  if (!Array.isArray(value.hashtags) || value.hashtags.length < 5) missing.push("hashtags(>=5)");
-  if (!Array.isArray(value.scenes) || value.scenes.length < 2) missing.push("scenes(>=2)");
-  return { valid: missing.length === 0, missing };
 }
 
 function safeParse(text) {
@@ -42,49 +46,213 @@ function safeParse(text) {
   }
 }
 
-function normalizeResult(value, trend) {
-  const base = value && typeof value === "object" ? value : {};
-  const hook = String(base.hook || trend?.hook || "").trim() || "POV: he said 50/50, so I laughed";
-  const script = String(base.script || "").trim() || String(trend?.adaptation_for_user || "").trim() || hook;
-  const caption = String(base.caption || "").trim() || "some of you still don’t get it 😅";
-  const loop_ending =
-    String(base.loop_ending || "").trim() || `Watch again from "${hook.split(/\\s+/).slice(0, 4).join(" ")}"`;
+/** Accept partial LLM output so retries can still succeed; full strict check after normalize. */
+function validateLlmPayload(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  if (Array.isArray(obj.viral_scripts) && obj.viral_scripts.length > 0) {
+    const scenes = obj.viral_scripts[0]?.scenes;
+    return Array.isArray(scenes) && scenes.length >= 3;
+  }
+  if (!isBlank(obj.hook) && !isBlank(obj.script) && Array.isArray(obj.scenes) && obj.scenes.length >= 2) return true;
+  return false;
+}
+
+function normalizeScene(raw, idx, trendHook) {
+  const label = String(raw?.label || SCENE_LABELS[idx] || `Scene ${idx + 1}`).trim() || SCENE_LABELS[idx];
+  return {
+    scene: Number(raw?.scene) || idx + 1,
+    label,
+    visual: String(raw?.visual || "").trim() || "Tight face cam, natural light, fast energy, handheld.",
+    dialogue: String(raw?.dialogue || raw?.voiceover || "").trim() || String(trendHook || "").trim() || "You need to hear this.",
+    caption: String(raw?.caption || raw?.text_overlay || "").trim() || "wait—",
+    emotion: String(raw?.emotion || "").trim() || "curiosity"
+  };
+}
+
+function padScenesToSix(scenesIn, trendHook) {
+  const base = Array.isArray(scenesIn) ? scenesIn.filter((s) => s && typeof s === "object") : [];
+  const out = [];
+  for (let i = 0; i < 6; i += 1) {
+    out.push(normalizeScene(base[i] || {}, i, trendHook));
+  }
+  return out;
+}
+
+function legacyToViralScripts(parsed, trend) {
+  const hook = String(parsed?.hook || trend?.hook || "").trim();
+  const script = String(parsed?.script || "").trim();
+  const lines = script.split("\n").map((l) => l.trim()).filter(Boolean);
+  const legacyScenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
+  const scenes = [];
+  for (let i = 0; i < 6; i += 1) {
+    const s = legacyScenes[i] || {};
+    const vo = String(s.voiceover || lines[i] || lines[0] || hook).trim();
+    scenes.push({
+      scene: i + 1,
+      label: SCENE_LABELS[i],
+      visual: String(s.visual || "").trim() || "Front cam, bold energy, quick cuts.",
+      dialogue: vo,
+      caption: String(s.text_overlay || hook).trim() || "👀",
+      emotion: i === 0 ? "curiosity" : i === 4 ? "shock" : i === 5 ? "belonging" : "tension"
+    });
+  }
+  return [
+    { variation: 1, angle: DEFAULT_ANGLES[0], scenes },
+    {
+      variation: 2,
+      angle: DEFAULT_ANGLES[1],
+      scenes: scenes.map((sc, j) => ({
+        ...sc,
+        dialogue: j === 2 ? `${sc.dialogue} (beat—wrong take?)` : sc.dialogue
+      }))
+    },
+    {
+      variation: 3,
+      angle: DEFAULT_ANGLES[2],
+      scenes: scenes.map((sc, j) => ({
+        ...sc,
+        dialogue: j === 5 ? `${sc.dialogue} Comment if you felt this.` : sc.dialogue
+      }))
+    }
+  ];
+}
+
+function ensureThreeViralScripts(viral_scripts, trend, parsed) {
+  const hook = String(trend?.hook || "").trim();
+  let list = Array.isArray(viral_scripts) ? viral_scripts.filter((v) => v && typeof v === "object") : [];
+  if (list.length === 0 && parsed && (parsed.hook || parsed.script)) {
+    list = legacyToViralScripts(parsed, trend);
+  }
+  const normalized = list.map((vs, idx) => {
+    const variation = Number(vs.variation) || idx + 1;
+    const angle = String(vs.angle || vs.title || DEFAULT_ANGLES[idx] || `Script ${idx + 1}`).trim();
+    const scenes = padScenesToSix(vs.scenes, hook);
+    return { variation, angle, scenes };
+  });
+  while (normalized.length < 3) {
+    const i = normalized.length;
+    const cloneFrom = normalized[Math.max(0, i - 1)] || { scenes: padScenesToSix([], hook) };
+    normalized.push({
+      variation: i + 1,
+      angle: DEFAULT_ANGLES[i] || `Script ${i + 1}`,
+      scenes: cloneFrom.scenes.map((sc, j) => ({
+        ...sc,
+        scene: j + 1,
+        dialogue:
+          j === 1
+            ? `${sc.dialogue} (hard cut—new angle)`
+            : j === 4
+              ? `${sc.dialogue} Plot twist.`
+              : sc.dialogue
+      }))
+    });
+  }
+  return normalized.slice(0, 3).map((v, idx) => ({
+    ...v,
+    variation: idx + 1,
+    angle: v.angle || DEFAULT_ANGLES[idx]
+  }));
+}
+
+function buildFormattedExport(topic, viral_scripts, caption, hashtags) {
+  const lines = [];
+  lines.push(`Topic: ${topic}`);
+  lines.push("");
+  viral_scripts.forEach((vs, si) => {
+    lines.push(`━━━ VIRAL SCRIPT ${si + 1}${vs.angle ? ` — ${vs.angle}` : ""} ━━━`);
+    lines.push("");
+    (vs.scenes || []).forEach((sc) => {
+      lines.push(`Scene ${sc.scene} (${sc.label}):`);
+      lines.push(`- Visual: ${sc.visual}`);
+      lines.push(`- Dialogue/Voiceover: ${sc.dialogue}`);
+      lines.push(`- Caption/Text on screen: ${sc.caption}`);
+      lines.push(`- Emotion: ${sc.emotion}`);
+      lines.push("");
+    });
+  });
+  lines.push("Caption:");
+  lines.push(caption);
+  lines.push("");
+  lines.push("Hashtags:");
+  lines.push((hashtags || []).join(" "));
+  return lines.join("\n").trim();
+}
+
+function normalizeResult(parsed, trend) {
+  const base = parsed && typeof parsed === "object" ? parsed : {};
+  const topic = String(base.topic || trend?.title || trend?.hook || "Trend topic").trim() || "Trend topic";
+
+  const viral_scripts = ensureThreeViralScripts(base.viral_scripts, trend, base);
+  const primary = viral_scripts[0];
+  const firstScene = primary?.scenes?.[0];
+  const hook = String(base.hook || firstScene?.dialogue || trend?.hook || "").trim() || "POV: you almost scrolled past this";
+  const script = (primary?.scenes || []).map((s) => s.dialogue).join("\n");
+
+  const legacyScenes = (primary?.scenes || []).map((s, idx) => ({
+    scene: s.scene || idx + 1,
+    visual: s.visual,
+    voiceover: s.dialogue,
+    text_overlay: s.caption,
+    camera: "Fast cuts / handheld — match viral TikTok pacing",
+    label: s.label,
+    emotion: s.emotion
+  }));
+
+  let caption = String(base.caption || "").trim();
+  if (isBlank(caption)) {
+    caption = "the algorithm needed you to see this";
+  }
+
+  let loop_ending = String(base.loop_ending || "").trim();
+  if (isBlank(loop_ending)) {
+    const hookWords = hook.split(/\s+/).slice(0, 5).join(" ");
+    loop_ending = `Loop: jump cut back to “${hookWords}”`;
+  }
 
   const hashtags = Array.isArray(base.hashtags) ? base.hashtags.map((t) => String(t || "").trim()).filter(Boolean) : [];
   const uniq = [...new Set(hashtags)];
-  while (uniq.length < 5) uniq.push(`#reels${uniq.length + 1}`);
+  while (uniq.length < 5) uniq.push(`#fyp${uniq.length + 1}`);
 
-  const scenesIn = Array.isArray(base.scenes) ? base.scenes : [];
-  const scenes = scenesIn
-    .filter((s) => s && typeof s === "object")
-    .map((s, idx) => ({
-      scene: Number(s.scene) || idx + 1,
-      visual: String(s.visual || "").trim() || "Front cam selfie in car, luxury vibe, natural light, slight handheld.",
-      voiceover: String(s.voiceover || "").trim() || "",
-      text_overlay: String(s.text_overlay || "").trim() || hook,
-      camera: String(s.camera || "").trim() || "Front camera selfie, slight handheld movement"
-    }));
-
-  const lines = script.split("\n").map((l) => l.trim()).filter(Boolean);
-  while (scenes.length < 3) {
-    scenes.push({
-      scene: scenes.length + 1,
-      visual: scenes.length === 0 ? "Mirror selfie in elevator, clean outfit, soft lighting, smirk." : "Kitchen vlog shot, warm light, coffee cup, confident look.",
-      voiceover: "",
-      text_overlay: scenes.length === 0 ? hook : "Be honest… who’s wrong?",
-      camera: scenes.length === 0 ? "Mirror selfie" : "Casual vlog, handheld"
-    });
-  }
+  const formatted_export = String(base.formatted_export || "").trim() || buildFormattedExport(topic, viral_scripts, caption, uniq);
 
   return {
+    topic,
+    viral_scripts,
     hook,
     script,
-    scenes: scenes.slice(0, 4).map((s, idx) => ({ ...s, voiceover: s.voiceover || lines[idx] || lines[0] || script })),
+    scenes: legacyScenes,
     caption,
-    hashtags: uniq.slice(0, 8),
-    loop_ending
+    hashtags: uniq.slice(0, 12),
+    loop_ending,
+    formatted_export
   };
 }
+
+function validateNormalized(value) {
+  if (!value || typeof value !== "object") return { valid: false, missing: ["root"] };
+  const missing = [];
+  if (isBlank(value.topic)) missing.push("topic");
+  if (!Array.isArray(value.viral_scripts) || value.viral_scripts.length !== 3) missing.push("viral_scripts(3)");
+  else {
+    value.viral_scripts.forEach((vs, i) => {
+      if (!Array.isArray(vs.scenes) || vs.scenes.length !== 6) missing.push(`script${i + 1}.scenes(6)`);
+      else {
+        vs.scenes.forEach((sc, j) => {
+          if (isBlank(sc.visual)) missing.push(`s${i + 1}.${j}.visual`);
+          if (isBlank(sc.dialogue)) missing.push(`s${i + 1}.${j}.dialogue`);
+          if (isBlank(sc.caption)) missing.push(`s${i + 1}.${j}.caption`);
+          if (isBlank(sc.emotion)) missing.push(`s${i + 1}.${j}.emotion`);
+        });
+      }
+    });
+  }
+  if (isBlank(value.caption)) missing.push("caption");
+  if (!Array.isArray(value.hashtags) || value.hashtags.length < 5) missing.push("hashtags(>=5)");
+  if (isBlank(value.loop_ending)) missing.push("loop_ending");
+  return { valid: missing.length === 0, missing };
+}
+
+const FALLBACK_HASHTAGS = ["#fyp", "#viral", "#reels", "#shorts", "#storytime"];
 
 export async function generateScriptFromTrend(req, res) {
   const trend = req.body?.trend;
@@ -98,55 +266,127 @@ export async function generateScriptFromTrend(req, res) {
   console.log("[generate-script-from-trend] TREND SENT:", trend);
 
   const prompt = `
-You are a viral content strategist.
-Convert trend ideas into HIGH-CONVERTING short-form video scripts.
-Focus on hooks, emotional tension, retention, and viral structure.
+You are an expert viral short-form creator (TikTok, Reels, YouTube Shorts).
+Generate HIGH-QUALITY, REALISTIC scripts — not generic AI filler.
+
+RULES:
+- Hook-driven, emotional, fast-paced, scroll-stopping
+- NEVER use: "Welcome back", "In this video", "Today we're going to", "As you can see", "Let's dive in"
+- Short punchy lines; sound HUMAN; include at least one pattern interrupt (unexpected beat) per script
+- Strong curiosity gaps + storytelling; vary tone across the 3 scripts (e.g. direct POV vs twist vs softer CTA)
 
 ${CLIENT_NICHE_HIDDEN_CONTEXT}
 
-Convert the following trend into a complete viral video script.
-
-TREND DATA:
+CLIENT TOPIC / TREND (use as the "Topic" and anchor every line to this):
+- Title: ${String(trend?.title || "")}
 - Hook: ${String(trend?.hook || "")}
 - Type: ${String(trend?.content_type || "")}
 - Summary: ${String(trend?.summary || "")}
 - Why it works: ${JSON.stringify(trend?.why_it_works || {})}
 - Adaptation: ${String(trend?.adaptation_for_user || "")}
 
-OUTPUT FORMAT (STRICT JSON):
+OUTPUT: ONE JSON OBJECT ONLY (no markdown, no commentary).
+
+Schema:
 {
-  "hook": "",
-  "script": "",
-  "scenes": [
+  "topic": "clear topic string",
+  "viral_scripts": [
     {
-      "scene": 1,
-      "visual": "",
-      "voiceover": "",
-      "text_overlay": "",
-      "camera": ""
-    }
+      "variation": 1,
+      "angle": "one-line name for this variant",
+      "scenes": [
+        {
+          "scene": 1,
+          "label": "Hook - first 3 seconds",
+          "visual": "",
+          "dialogue": "",
+          "caption": "",
+          "emotion": ""
+        },
+        {
+          "scene": 2,
+          "label": "Scene 2",
+          "visual": "",
+          "dialogue": "",
+          "caption": "",
+          "emotion": ""
+        },
+        {
+          "scene": 3,
+          "label": "Scene 3",
+          "visual": "",
+          "dialogue": "",
+          "caption": "",
+          "emotion": ""
+        },
+        {
+          "scene": 4,
+          "label": "Scene 4",
+          "visual": "",
+          "dialogue": "",
+          "caption": "",
+          "emotion": ""
+        },
+        {
+          "scene": 5,
+          "label": "Climax / Twist",
+          "visual": "",
+          "dialogue": "",
+          "caption": "",
+          "emotion": ""
+        },
+        {
+          "scene": 6,
+          "label": "Ending / Call to Action",
+          "visual": "",
+          "dialogue": "",
+          "caption": "",
+          "emotion": ""
+        }
+      ]
+    },
+    { "variation": 2, "angle": "", "scenes": [ /* same 6 scenes structure */ ] },
+    { "variation": 3, "angle": "", "scenes": [ /* same 6 scenes structure */ ] }
   ],
-  "caption": "",
-  "hashtags": [],
-  "loop_ending": ""
+  "caption": "platform caption line",
+  "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4", "#tag5", "#tag6"],
+  "loop_ending": "how to loop seamlessly"
 }
 
-RULES:
-- Hook must be STRONG and scroll-stopping
-- Script must feel like Instagram Reels / TikTok
-- No empty fields
-- Output ONLY JSON (no text outside)
+Hard requirements:
+- Exactly 3 objects in viral_scripts
+- Each scenes array MUST have exactly 6 objects in order (hook → … → CTA)
+- Every visual, dialogue, caption, emotion must be non-empty strings
+- dialogue = exact spoken line / voiceover (natural, viral)
+- caption = short on-screen text
+- emotion = one word or short phrase (e.g. curiosity, shock, anger, hope, guilt, belonging)
 `.trim();
+
+  const fallbackPayload = {
+    topic: String(trend?.title || trend?.hook || "Trend topic").trim(),
+    viral_scripts: legacyToViralScripts(
+      {
+        hook: String(trend?.hook || "POV: you almost said yes to the wrong thing."),
+        script: `${String(trend?.hook || "")}\nPause. Read that again.\nThat’s not drama — that’s a boundary.\nComment “facts” if you felt this.`,
+        scenes: []
+      },
+      trend
+    ),
+    caption: "save this before you need it",
+    hashtags: FALLBACK_HASHTAGS,
+    loop_ending: "Hard cut back to the first line of the hook."
+  };
 
   try {
     const { parsed, raw } = await generateStrictJson({
       systemPrompt: MASTER_SYSTEM_PROMPT,
       userPrompt: prompt,
-      model: "openai/gpt-5.4-pro",
-      temperature: 0.7,
-      max_tokens: 2200,
-      retries: 1,
-      validate: (obj) => validatePayload(obj).valid
+      model: WAVESPEED_TREND_SCOUT_MODEL,
+      temperature: 0.75,
+      max_tokens: 5000,
+      retries: 2,
+      validate: (obj) => validateLlmPayload(obj),
+      enforceGenericCheck: false
     });
 
     // eslint-disable-next-line no-console
@@ -156,38 +396,19 @@ RULES:
     console.log("[generate-script-from-trend] PARSED RESPONSE:", parsedSafe);
 
     const normalized = normalizeResult(parsedSafe, trend);
-    const validation = validatePayload(normalized);
+    const validation = validateNormalized(normalized);
     if (!validation.valid) {
-      const fallback = normalizeResult(
-        {
-          hook: String(trend?.hook || ""),
-          script: `${String(trend?.hook || "")}\nStandards aren’t “toxic”. They’re expensive.\nBe honest—who’s wrong?`,
-          scenes: [],
-          caption: "this is why I don’t argue anymore",
-          hashtags: ["#relationships", "#dating", "#arabgirl", "#moroccan", "#reels", "#fyp"],
-          loop_ending: "Watch again from the first word."
-        },
-        trend
-      );
-      return res.json({ success: true, data: fallback, fallback: true });
+      // eslint-disable-next-line no-console
+      console.warn("[generate-script-from-trend] validation failed:", validation.missing);
+      const fb = normalizeResult(fallbackPayload, trend);
+      return res.json({ success: true, data: fb, fallback: true });
     }
 
     return res.json({ success: true, data: normalized });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("[generate-script-from-trend] error:", error?.message || error);
-    const fallback = normalizeResult(
-      {
-        hook: String(trend?.hook || ""),
-        script: `${String(trend?.hook || "")}\nStandards aren’t “toxic”. They’re expensive.\nBe honest—who’s wrong?`,
-        scenes: [],
-        caption: "this is why I don’t argue anymore",
-        hashtags: ["#relationships", "#dating", "#arabgirl", "#moroccan", "#reels", "#fyp"],
-        loop_ending: "Watch again from the first word."
-      },
-      trend
-    );
-    return res.json({ success: true, data: fallback, fallback: true });
+    const fb = normalizeResult(fallbackPayload, trend);
+    return res.json({ success: true, data: fb, fallback: true });
   }
 }
-

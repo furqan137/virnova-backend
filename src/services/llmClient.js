@@ -142,7 +142,9 @@ export async function generateStrictJson({
   temperature = 0.7,
   max_tokens = 2000,
   retries = 2,
-  validate
+  validate,
+  /** When false, skip looksGeneric() so JSON dialogue fields can contain casual phrases. */
+  enforceGenericCheck = true
 }) {
   let lastText = "";
   let lastParsed = null;
@@ -165,7 +167,7 @@ export async function generateStrictJson({
     lastParsed = parsed;
 
     const valid = typeof validate === "function" ? validate(parsed) : Boolean(parsed);
-    const generic = looksGeneric(content);
+    const generic = enforceGenericCheck ? looksGeneric(content) : false;
 
     if (parsed && valid && !generic) {
       return { parsed, raw: content, completion };
